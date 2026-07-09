@@ -1,0 +1,4 @@
+*.lck
+Debug/
+Release/
+.metadata/
