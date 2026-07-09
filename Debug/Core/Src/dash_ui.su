@@ -1,0 +1,15 @@
+../Core/Src/dash_ui.c:38:13:DrawSegment	32	static
+../Core/Src/dash_ui.c:72:13:DrawDigit	40	static
+../Core/Src/dash_ui.c:92:13:DrawLetterM	24	static
+../Core/Src/dash_ui.c:101:13:DrawLetterP	24	static
+../Core/Src/dash_ui.c:109:13:DrawLetterH	24	static
+../Core/Src/dash_ui.c:116:13:DrawMphLabel	8	static
+../Core/Src/dash_ui.c:124:13:DrawScaleMarks	24	static
+../Core/Src/dash_ui.c:136:13:DrawStatusBox	24	static
+../Core/Src/dash_ui.c:142:13:DrawSpeedBar	32	static
+../Core/Src/dash_ui.c:176:13:MakeDigitSlots	24	static
+../Core/Src/dash_ui.c:188:13:DrawDigitSlot	32	static
+../Core/Src/dash_ui.c:206:13:DrawSpeedDigits	24	static
+../Core/Src/dash_ui.c:223:6:DashUI_Init	16	static
+../Core/Src/dash_ui.c:248:6:DashUI_UpdateSpeed	16	static
+../Core/Src/dash_ui.c:267:6:DashUI_UpdateGpsStatus	16	static
