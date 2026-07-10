@@ -34,6 +34,26 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+/*
+ * GPS receive debug:
+ * 1U = while there is no valid RMC speed, show rx_byte_count % 200 on the big MPH digits.
+ * This proves USART2 RX bytes are reaching the firmware before the NMEA parser matters.
+ * Set back to 0U after the wiring/baud/IRQ path is confirmed.
+ * Now that GPS is working, this can become 0U when you want a quiet boot screen.
+ */
+#define GPS_DEBUG_SHOW_RX_COUNT_AS_SPEED 1U
+
+/*
+ * Raw D2/PA10 edge test:
+ * 1U = configure Arduino D2 / PA10 as a plain GPIO input and count pin transitions.
+ * This bypasses USART2, baud rate, and the NMEA parser so we can prove whether the
+ * GPS TX wire is electrically changing at the MCU pin.
+ * Normal GPS mode keeps this at 0U and uses USART1_RX on the same PA10 pin.
+ */
+#define GPS_DEBUG_RAW_PA3_EDGE_TEST 0U
+#define GPS_DEBUG_RX_Pin GPIO_PIN_10
+#define GPS_DEBUG_RX_GPIO_Port GPIOA
+#define GPS_DEBUG_RX_EXTI_IRQn EXTI15_10_IRQn
 
 /* USER CODE END PD */
 
@@ -46,15 +66,21 @@
 SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 GPS_Data_t gps_data;
+#if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
+static uint32_t gps_raw_pa3_edge_count = 0U;
+static GPIO_PinState gps_raw_pa3_last_state = GPIO_PIN_RESET;
+#endif
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
@@ -63,6 +89,34 @@ static void MX_SPI1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
+static void GPS_DebugRawPa3Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /*
+   * D0/PA3 is tied to USART2 and the Nucleo ST-LINK virtual COM path. D2/PA10
+   * gives this raw signal test a quieter input pin that should not be held high
+   * by the debugger side of the board.
+   */
+  HAL_GPIO_DeInit(GPS_DEBUG_RX_GPIO_Port, GPS_DEBUG_RX_Pin);
+
+  GPIO_InitStruct.Pin = GPS_DEBUG_RX_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPS_DEBUG_RX_GPIO_Port, &GPIO_InitStruct);
+
+  gps_raw_pa3_last_state = HAL_GPIO_ReadPin(GPS_DEBUG_RX_GPIO_Port, GPS_DEBUG_RX_Pin);
+  gps_raw_pa3_edge_count = 0U;
+
+  /*
+   * EXTI15_10 handles external interrupt lines 10 through 15. PA10 changes now
+   * call HAL_GPIO_EXTI_Callback(), independent of UART baud.
+   */
+  HAL_NVIC_SetPriority(GPS_DEBUG_RX_EXTI_IRQn, 1, 0);
+  HAL_NVIC_EnableIRQ(GPS_DEBUG_RX_EXTI_IRQn);
+}
+#endif
 
 /* USER CODE END 0 */
 
@@ -95,6 +149,11 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  /*
+   * GPS is on USART1_RX / PA10 / Arduino D2. We moved away from USART2_RX / PA3
+   * because PA3 is tied to the Nucleo ST-LINK virtual COM path and was held high.
+   */
+  MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
@@ -102,7 +161,11 @@ int main(void)
   ST7796_Init();
   DashUI_Init();
   DashUI_UpdateSpeed(0U);
-  GPS_Init(&huart2);
+#if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
+  GPS_DebugRawPa3Init();
+#else
+  GPS_Init(&huart1);
+#endif
 
   /* USER CODE END 2 */
 
@@ -113,6 +176,12 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+#if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
+    DashUI_UpdateGpsStatus((gps_raw_pa3_last_state == GPIO_PIN_SET) ? 1U : 0U,
+                           (gps_raw_pa3_last_state == GPIO_PIN_RESET) ? 1U : 0U,
+                           (gps_raw_pa3_edge_count > 0U) ? 1U : 0U);
+    DashUI_UpdateSpeed((uint16_t)(gps_raw_pa3_edge_count % 200U));
+#else
     GPS_Task();
     gps_data = GPS_GetData();
     DashUI_UpdateGpsStatus((gps_data.rx_byte_count > 0U) ? 1U : 0U,
@@ -122,7 +191,14 @@ int main(void)
     {
       DashUI_UpdateSpeed(gps_data.speed_mph);
     }
+#if (GPS_DEBUG_SHOW_RX_COUNT_AS_SPEED != 0U)
+    else
+    {
+      DashUI_UpdateSpeed((uint16_t)(gps_data.rx_byte_count % 200U));
+    }
+#endif
     HAL_Delay(20);
+#endif
   }
   /* USER CODE END 3 */
 }
@@ -209,6 +285,43 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  /*
+   * ATGM336H modules commonly output NMEA at 9600 baud, 8 data bits, no parity,
+   * 1 stop bit. UART_MODE_RX is enough because we only listen to GPS TX for now.
+   */
+  huart1.Init.BaudRate = 9600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
 
 }
 
@@ -305,6 +418,16 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+#if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == GPS_DEBUG_RX_Pin)
+  {
+    gps_raw_pa3_last_state = HAL_GPIO_ReadPin(GPS_DEBUG_RX_GPIO_Port, GPS_DEBUG_RX_Pin);
+    gps_raw_pa3_edge_count++;
+  }
+}
+#endif
 
 /* USER CODE END 4 */
 

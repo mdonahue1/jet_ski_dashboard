@@ -3,10 +3,25 @@
 extern SPI_HandleTypeDef hspi1;
 
 #define ST7796_SPI_TIMEOUT 100U
+
+/*
+ * MADCTL is the display controller's memory-access-control register. It decides
+ * scan direction and RGB/BGR ordering. This value is the landscape orientation
+ * that makes the logical screen 480 wide by 320 high.
+ */
 #define ST7796_MADCTL_HORIZONTAL 0x28u
+
+/*
+ * We do not allocate a full frame buffer. A 480x320 RGB565 frame would be
+ * 307,200 bytes, far more RAM than this Nucleo has. Instead, large fills reuse
+ * a small repeated-color SPI buffer.
+ */
 #define ST7796_FILL_CHUNK_PIXELS 128U
 
-/* CS is the display's chip-select. Keep it low while one logical TFT transaction is active. */
+/*
+ * CS is the display's chip-select. Keep it low while one logical TFT
+ * transaction is active so the controller treats the bytes as one operation.
+ */
 static void ST7796_Select(void)
 {
   HAL_GPIO_WritePin(TFT_CS_GPIO_Port, TFT_CS_Pin, GPIO_PIN_RESET);
@@ -41,6 +56,10 @@ static void ST7796_Reset(void)
 
 static void ST7796_WriteCommand(uint8_t command)
 {
+  /*
+   * A command is usually a register address inside the ST7796S controller.
+   * DC low tells the TFT that this byte is a command, not pixel data.
+   */
   ST7796_CommandMode();
   (void)HAL_SPI_Transmit(&hspi1, &command, 1U, ST7796_SPI_TIMEOUT);
 }
@@ -48,6 +67,10 @@ static void ST7796_WriteCommand(uint8_t command)
 /* Write a raw data buffer. HAL wants a non-const pointer, so the cast is local here. */
 static void ST7796_WriteData(const uint8_t *data, uint16_t size)
 {
+  /*
+   * Data bytes are parameters for the previous command, or raw pixel bytes
+   * after command 0x2C. DC high selects data mode.
+   */
   ST7796_DataMode();
   (void)HAL_SPI_Transmit(&hspi1, (uint8_t *)data, size, ST7796_SPI_TIMEOUT);
 }
@@ -64,7 +87,11 @@ static void ST7796_WriteRegister(uint8_t command, const uint8_t *data, uint16_t 
 
 void ST7796_Init(void)
 {
-  /* These values are ported from the LCDWiki ST7796S hardware-SPI init flow. */
+  /*
+   * These values are ported from the LCDWiki ST7796S hardware-SPI init flow.
+   * Most TFT controllers need a vendor-specific startup sequence for power,
+   * gamma, porch timing, pixel format, and orientation before they draw well.
+   */
   static const uint8_t f0_unlock_1[] = { 0xC3 };
   static const uint8_t f0_unlock_2[] = { 0x96 };
   static const uint8_t madctl_initial[] = { 0x68 };
@@ -91,7 +118,10 @@ void ST7796_Init(void)
   ST7796_Reset();
   ST7796_Select();
 
-  /* Unlock the vendor command page, configure color format/orientation/power/gamma, then lock it. */
+  /*
+   * Unlock the vendor command page, configure color format/orientation/power/
+   * gamma, then lock it again. 0x3A = pixel format; 0x05 means RGB565.
+   */
   ST7796_WriteRegister(0xF0, f0_unlock_1, sizeof(f0_unlock_1));
   ST7796_WriteRegister(0xF0, f0_unlock_2, sizeof(f0_unlock_2));
   ST7796_WriteRegister(0x36, madctl_initial, sizeof(madctl_initial));
@@ -126,7 +156,10 @@ void ST7796_SetWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
 {
   uint8_t data[4];
 
-  /* Clamp the requested area so a bad draw call cannot address outside the panel. */
+  /*
+   * Clamp the requested area so a bad draw call cannot address outside the
+   * panel. This keeps higher-level UI code from needing its own clipping.
+   */
   if (x0 >= ST7796_WIDTH)
   {
     x0 = ST7796_WIDTH - 1U;
@@ -144,14 +177,20 @@ void ST7796_SetWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
     y1 = ST7796_HEIGHT - 1U;
   }
 
-  /* 0x2A is the column/X address range, sent big-endian: start high/low, end high/low. */
+  /*
+   * 0x2A is the column/X address range. The controller wants 16-bit values
+   * sent big-endian: start high, start low, end high, end low.
+   */
   data[0] = (uint8_t)(x0 >> 8);
   data[1] = (uint8_t)(x0 & 0xFFU);
   data[2] = (uint8_t)(x1 >> 8);
   data[3] = (uint8_t)(x1 & 0xFFU);
   ST7796_WriteRegister(0x2A, data, sizeof(data));
 
-  /* 0x2B is the row/Y address range. After this, 0x2C starts the pixel stream. */
+  /*
+   * 0x2B is the row/Y address range. 0x2C is "memory write"; every RGB565 pixel
+   * byte after 0x2C lands inside the selected rectangle, left-to-right/top-down.
+   */
   data[0] = (uint8_t)(y0 >> 8);
   data[1] = (uint8_t)(y0 & 0xFFU);
   data[2] = (uint8_t)(y1 >> 8);
@@ -194,6 +233,7 @@ void ST7796_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t co
   /*
    * RGB565 is two bytes per pixel, high byte first.
    * Pre-filling a small buffer lets us send many same-color pixels per HAL call.
+   * This is much faster than calling ST7796_DrawPixel() thousands of times.
    */
   for (i = 0U; i < ST7796_FILL_CHUNK_PIXELS; i++)
   {
@@ -202,6 +242,10 @@ void ST7796_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t co
   }
 
   ST7796_Select();
+  /*
+   * One rectangle fill is one SPI transaction: set the address window once,
+   * then stream exactly width*height pixels into that window.
+   */
   ST7796_SetWindow(x, y, (uint16_t)(x + w - 1U), (uint16_t)(y + h - 1U));
   ST7796_DataMode();
 
@@ -223,7 +267,10 @@ void ST7796_DrawPixel(uint16_t x, uint16_t y, uint16_t color)
 {
   uint8_t data[2];
 
-  /* Single-pixel writes are slow but handy for debugging and small details. */
+  /*
+   * Single-pixel writes are slow because they must set a 1x1 address window
+   * for each pixel. They are still handy for diagnostics and tiny details.
+   */
   if ((x >= ST7796_WIDTH) || (y >= ST7796_HEIGHT))
   {
     return;

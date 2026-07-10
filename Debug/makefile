@@ -34,34 +34,34 @@ $(wildcard ../makefile.init) \
 $(wildcard ../makefile.targets) \
 
 
-BUILD_ARTIFACT_NAME := Jet_Ski_Dash_v1
+BUILD_ARTIFACT_NAME := jet_ski_dashboard
 BUILD_ARTIFACT_EXTENSION := elf
 BUILD_ARTIFACT_PREFIX :=
 BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME)$(if $(BUILD_ARTIFACT_EXTENSION),.$(BUILD_ARTIFACT_EXTENSION),)
 
 # Add inputs and outputs from these tool invocations to the build variables 
 EXECUTABLES += \
-Jet_Ski_Dash_v1.elf \
+jet_ski_dashboard.elf \
 
 MAP_FILES += \
-Jet_Ski_Dash_v1.map \
+jet_ski_dashboard.map \
 
 SIZE_OUTPUT += \
 default.size.stdout \
 
 OBJDUMP_LIST += \
-Jet_Ski_Dash_v1.list \
+jet_ski_dashboard.list \
 
 
 # All Target
 all: main-build
 
 # Main-build Target
-main-build: Jet_Ski_Dash_v1.elf secondary-outputs
+main-build: jet_ski_dashboard.elf secondary-outputs
 
 # Tool invocations
-Jet_Ski_Dash_v1.elf Jet_Ski_Dash_v1.map: $(OBJS) $(USER_OBJS) C:\Users\miner\STM32CubeIDE\workspace_1.19.0\Jet_Ski_Dash_v1\STM32F446RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Jet_Ski_Dash_v1.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\miner\STM32CubeIDE\workspace_1.19.0\Jet_Ski_Dash_v1\STM32F446RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Jet_Ski_Dash_v1.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+jet_ski_dashboard.elf jet_ski_dashboard.map: $(OBJS) $(USER_OBJS) C:\Users\mdonahue1\STM32CubeIDE\workspace_1.19.0\jet_ski_dashboard\STM32F446RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "jet_ski_dashboard.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\mdonahue1\STM32CubeIDE\workspace_1.19.0\jet_ski_dashboard\STM32F446RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="jet_ski_dashboard.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
@@ -70,14 +70,14 @@ default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-Jet_Ski_Dash_v1.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "Jet_Ski_Dash_v1.list"
+jet_ski_dashboard.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "jet_ski_dashboard.list"
 	@echo 'Finished building: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(RM) Jet_Ski_Dash_v1.elf Jet_Ski_Dash_v1.list Jet_Ski_Dash_v1.map default.size.stdout
+	-$(RM) default.size.stdout jet_ski_dashboard.elf jet_ski_dashboard.list jet_ski_dashboard.map
 	-@echo ' '
 
 secondary-outputs: $(SIZE_OUTPUT) $(OBJDUMP_LIST)

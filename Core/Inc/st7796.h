@@ -31,7 +31,10 @@ void ST7796_SetWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 /* Fill the whole screen with one RGB565 color. */
 void ST7796_Fill(uint16_t color);
 
-/* Fill a clipped rectangle. This is the main primitive used by the dashboard UI. */
+/*
+ * Fill a clipped rectangle. This is the main primitive used by the dashboard UI.
+ * The project draws directly over SPI instead of keeping a full-screen framebuffer.
+ */
 void ST7796_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
 
 /* Draw one pixel. Useful for diagnostics or tiny details, but slow for large graphics. */

@@ -3,18 +3,56 @@
 
 #define GPS_LINE_MAX 96U
 
+/*
+ * gps_uart points to whichever UART main.c selected for the GPS module.
+ * Right now that is USART1 on PA10 / Arduino D2, but keeping the handle generic
+ * means this driver does not care which STM32 UART is used.
+ */
 static UART_HandleTypeDef *gps_uart = 0;
+
+/*
+ * HAL_UART_Receive_IT() needs a persistent byte buffer because the interrupt
+ * may complete long after the function call returns. This one byte is reused
+ * forever: receive one byte, process it, arm the next one.
+ */
 static uint8_t rx_byte = 0U;
 
+/*
+ * rx_line is built inside the UART interrupt one character at a time.
+ * ready_line is a complete NMEA sentence copied out for the main loop to parse.
+ * Keeping parsing out of the IRQ keeps interrupts short and predictable.
+ */
 static char rx_line[GPS_LINE_MAX];
 static uint16_t rx_index = 0U;
 
 static volatile uint8_t line_ready = 0U;
 static char ready_line[GPS_LINE_MAX];
 
-static GPS_Data_t gps_data = { 0U, 0U, 0U };
+static GPS_Data_t gps_data = { 0U };
 
-/* Convert an ASCII decimal like "12.34" knots into centi-knots: 1234. */
+static void ArmGpsReceive(void)
+{
+  if (gps_uart == 0)
+  {
+    return;
+  }
+
+  /*
+   * HAL_UART_Receive_IT() arms the UART peripheral and returns immediately.
+   * The byte arrives later in the USART interrupt, then HAL calls
+   * HAL_UART_RxCpltCallback(). If arming fails, count it for diagnostics.
+   */
+  if (HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U) != HAL_OK)
+  {
+    gps_data.error_count++;
+  }
+}
+
+/*
+ * Convert an ASCII decimal like "12.34" knots into centi-knots: 1234.
+ * "Centi" means hundredths. Using integer hundredths avoids floating point,
+ * which keeps the code smaller and more predictable on the MCU.
+ */
 static uint32_t ParseCentiKnots(const char *text)
 {
   uint32_t whole = 0U;
@@ -58,6 +96,11 @@ static uint16_t CentiKnotsToMph(uint32_t centi_knots)
 
 static uint8_t IsRmcSentence(const char *line)
 {
+  /*
+   * NMEA talker IDs can vary: $GPRMC, $GNRMC, etc. The RMC part starts at
+   * characters 3-5, so checking those bytes accepts both GPS-only and GNSS
+   * combined sentences.
+   */
   return ((line[0] == '$') &&
           (line[3] == 'R') &&
           (line[4] == 'M') &&
@@ -76,6 +119,10 @@ static void CopyNmeaField(const char *line, uint8_t wanted_field, char *out, uin
 
   out[0] = '\0';
 
+  /*
+   * NMEA fields are comma-separated, ending before the optional checksum '*'.
+   * Field 0 is the sentence ID, field 1 is the first value after it, and so on.
+   */
   while ((*line != '\0') && (*line != '*'))
   {
     if (field == wanted_field)
@@ -121,6 +168,10 @@ static void ParseRmcSentence(char *line)
   {
     uint32_t centi_knots = ParseCentiKnots(speed_knots_text);
 
+    /*
+     * RMC status 'A' means active/valid fix. 'V' means void, which usually
+     * happens indoors, during startup, or when satellites are not locked yet.
+     */
     gps_data.has_fix = 1U;
     gps_data.speed_valid = 1U;
     gps_data.speed_mph = CentiKnotsToMph(centi_knots);
@@ -144,9 +195,11 @@ void GPS_Init(UART_HandleTypeDef *huart)
   gps_data.rx_byte_count = 0U;
   gps_data.line_count = 0U;
   gps_data.rmc_count = 0U;
+  gps_data.error_count = 0U;
+  gps_data.last_rx_byte = 0U;
 
   /* Arm the first 1-byte receive. Each completed byte re-arms reception in the callback. */
-  (void)HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U);
+  ArmGpsReceive();
 }
 
 void GPS_Task(void)
@@ -161,6 +214,7 @@ void GPS_Task(void)
   /*
    * Copy the ready line with interrupts briefly disabled so the UART IRQ cannot modify it
    * halfway through this read. Parsing happens afterward in normal main-loop context.
+   * This is the core IRQ/main-loop handoff: the IRQ collects bytes, the task parses lines.
    */
   __disable_irq();
   strncpy(local_line, ready_line, GPS_LINE_MAX);
@@ -173,7 +227,17 @@ void GPS_Task(void)
 
 GPS_Data_t GPS_GetData(void)
 {
-  return gps_data;
+  GPS_Data_t snapshot;
+
+  /*
+   * gps_data can be changed by the UART callback at interrupt time. Disable
+   * interrupts only long enough to copy the struct, then return the snapshot.
+   */
+  __disable_irq();
+  snapshot = gps_data;
+  __enable_irq();
+
+  return snapshot;
 }
 
 void GPS_UART_RxCpltCallback(UART_HandleTypeDef *huart)
@@ -184,9 +248,11 @@ void GPS_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   }
 
   gps_data.rx_byte_count++;
+  gps_data.last_rx_byte = rx_byte;
 
   if (rx_byte == '$')
   {
+    /* '$' marks the start of a new NMEA sentence. Drop any partial garbage. */
     rx_index = 0U;
     rx_line[rx_index++] = (char)rx_byte;
   }
@@ -194,6 +260,10 @@ void GPS_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   {
     if (rx_index > 0U)
     {
+      /*
+       * CR/LF marks the end of a sentence. Copy it to ready_line so the main
+       * loop can parse a stable complete sentence outside the interrupt.
+       */
       rx_line[rx_index] = '\0';
       strncpy(ready_line, rx_line, GPS_LINE_MAX);
       ready_line[GPS_LINE_MAX - 1U] = '\0';
@@ -204,6 +274,7 @@ void GPS_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   }
   else if (rx_index < (GPS_LINE_MAX - 1U))
   {
+    /* Normal sentence character. Save it if there is room for a terminator. */
     rx_line[rx_index++] = (char)rx_byte;
   }
   else
@@ -212,7 +283,8 @@ void GPS_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     rx_index = 0U;
   }
 
-  (void)HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U);
+  /* Re-arm reception so the next byte can interrupt us too. */
+  ArmGpsReceive();
 }
 
 void GPS_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -223,15 +295,22 @@ void GPS_UART_ErrorCallback(UART_HandleTypeDef *huart)
   }
 
   rx_index = 0U;
-  (void)HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U);
+  gps_data.error_count++;
+  /* Framing/noise/overrun errors can stop reception; restart it immediately. */
+  ArmGpsReceive();
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
+  /*
+   * This HAL callback name is fixed by STM32 HAL. We forward it into the GPS
+   * driver so the rest of the project does not need GPS code in interrupt files.
+   */
   GPS_UART_RxCpltCallback(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+  /* Same forwarding pattern for UART error recovery. */
   GPS_UART_ErrorCallback(huart);
 }

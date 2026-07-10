@@ -55,6 +55,7 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
+extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN EV */
@@ -200,6 +201,19 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /* USER CODE BEGIN 1 */
+/**
+  * @brief This function handles USART1 global interrupt.
+  */
+void USART1_IRQHandler(void)
+{
+  /*
+   * HAL reads USART1 status/data registers here. When the one-byte receive
+   * completes, HAL calls HAL_UART_RxCpltCallback(), which gps.c uses to store
+   * the byte and immediately arm the next receive.
+   */
+  HAL_UART_IRQHandler(&huart1);
+}
+
 /**
   * @brief This function handles USART2 global interrupt.
   */
