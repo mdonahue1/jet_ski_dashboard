@@ -107,6 +107,18 @@ static uint8_t IsRmcSentence(const char *line)
           (line[5] == 'C'));
 }
 
+static uint8_t IsVtgSentence(const char *line)
+{
+  /*
+   * VTG is "course over ground and ground speed". Like RMC, the talker prefix
+   * can vary, so $GPVTG and $GNVTG are both accepted.
+   */
+  return ((line[0] == '$') &&
+          (line[3] == 'V') &&
+          (line[4] == 'T') &&
+          (line[5] == 'G'));
+}
+
 static void CopyNmeaField(const char *line, uint8_t wanted_field, char *out, uint8_t out_size)
 {
   uint8_t field = 0U;
@@ -184,6 +196,50 @@ static void ParseRmcSentence(char *line)
   }
 }
 
+static void ParseVtgSentence(char *line)
+{
+  char speed_knots_text[16];
+  char mode_text[2];
+  uint8_t mode_allows_speed = 1U;
+
+  if (!IsVtgSentence(line))
+  {
+    return;
+  }
+
+  gps_data.vtg_count++;
+
+  /*
+   * VTG fields:
+   * 0 sentence ID, 1 course true, 2 T, 3 course magnetic, 4 M,
+   * 5 speed in knots, 6 N, 7 speed in km/h, 8 K, 9 mode if present.
+   *
+   * Some modules emit VTG near RMC. Parsing both can reduce firmware-side
+   * latency a bit, but the GPS module update rate is still the main limit.
+   */
+  CopyNmeaField(line, 5U, speed_knots_text, sizeof(speed_knots_text));
+  CopyNmeaField(line, 9U, mode_text, sizeof(mode_text));
+
+  if (mode_text[0] == 'N')
+  {
+    mode_allows_speed = 0U;
+  }
+
+  if ((speed_knots_text[0] != '\0') && (mode_allows_speed != 0U))
+  {
+    uint32_t centi_knots = ParseCentiKnots(speed_knots_text);
+
+    gps_data.speed_valid = 1U;
+    gps_data.speed_mph = CentiKnotsToMph(centi_knots);
+  }
+}
+
+static void ParseGpsSentence(char *line)
+{
+  ParseRmcSentence(line);
+  ParseVtgSentence(line);
+}
+
 void GPS_Init(UART_HandleTypeDef *huart)
 {
   gps_uart = huart;
@@ -195,6 +251,7 @@ void GPS_Init(UART_HandleTypeDef *huart)
   gps_data.rx_byte_count = 0U;
   gps_data.line_count = 0U;
   gps_data.rmc_count = 0U;
+  gps_data.vtg_count = 0U;
   gps_data.error_count = 0U;
   gps_data.last_rx_byte = 0U;
 
@@ -222,7 +279,7 @@ void GPS_Task(void)
   line_ready = 0U;
   __enable_irq();
 
-  ParseRmcSentence(local_line);
+  ParseGpsSentence(local_line);
 }
 
 GPS_Data_t GPS_GetData(void)

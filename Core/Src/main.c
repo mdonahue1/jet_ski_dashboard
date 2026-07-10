@@ -41,7 +41,7 @@
  * Set back to 0U after the wiring/baud/IRQ path is confirmed.
  * Now that GPS is working, this can become 0U when you want a quiet boot screen.
  */
-#define GPS_DEBUG_SHOW_RX_COUNT_AS_SPEED 1U
+#define GPS_DEBUG_SHOW_RX_COUNT_AS_SPEED 0U
 
 /*
  * Raw D2/PA10 edge test:
@@ -197,7 +197,7 @@ int main(void)
       DashUI_UpdateSpeed((uint16_t)(gps_data.rx_byte_count % 200U));
     }
 #endif
-    HAL_Delay(20);
+    HAL_Delay(5);
 #endif
   }
   /* USER CODE END 3 */

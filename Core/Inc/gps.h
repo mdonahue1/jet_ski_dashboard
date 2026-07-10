@@ -23,6 +23,7 @@ typedef struct
   uint32_t rx_byte_count;
   uint32_t line_count;
   uint32_t rmc_count;
+  uint32_t vtg_count;
   uint32_t error_count;
   uint8_t last_rx_byte;
 } GPS_Data_t;

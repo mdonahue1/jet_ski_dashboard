@@ -6,6 +6,10 @@
 #define DASH_DIM      0x3186U
 #define DASH_DARK     0x1082U
 #define DASH_ARC_OFF  0x2945U
+#define DASH_BEZEL    0x4A49U
+#define DASH_GAUGE_BORDER 0xBDF7U
+#define DASH_PANEL    0x18E3U
+#define DASH_BLUE     0x04BFU
 #define DASH_ORANGE   0xFD20U
 #define DASH_RED      ST7796_RED
 #define DASH_GREEN    ST7796_GREEN
@@ -29,11 +33,10 @@
 #define MPH_MAX       80U
 
 /*
- * The gauge arc has one block every 5 MPH: 0, 5, 10, ... 80.
- * That gives 17 blocks total and keeps updates cheap over SPI.
+ * The swept gauge maps 0-80 MPH onto a 250 degree arc. The old dotted arc used
+ * one dot every 5 MPH; the live sweep below is cleaner and less busy.
  */
 #define ARC_STEP_MPH  5U
-#define ARC_BLOCK     14U
 
 /* 0xFFFF means "force the first update" because no real MPH value can equal it. */
 static uint16_t last_mph = 0xFFFFU;
@@ -45,34 +48,10 @@ static uint16_t last_mph = 0xFFFFU;
 static uint8_t last_gps_rx = 0xFFU;
 static uint8_t last_gps_line = 0xFFU;
 static uint8_t last_gps_fix = 0xFFU;
-static uint8_t last_arc_blocks = 0xFFU;
-
-/*
- * Dotted circular gauge arc. The points are spaced from 0 MPH at lower-left
- * through 40 MPH at top-center to 80 MPH at lower-right.
- *
- * These coordinates were precomputed instead of using sin/cos on the STM32.
- * The MCU can do trig, but fixed tables are faster, simpler, and deterministic.
- */
-static const uint16_t arc_block_xy[17][2] = {
-  { 122U, 240U }, { 109U, 207U }, { 104U, 172U }, { 109U, 137U }, { 122U, 104U },
-  { 144U,  76U }, { 172U,  54U }, { 205U,  41U }, { 240U,  36U },
-  { 275U,  41U }, { 308U,  54U }, { 336U,  76U }, { 358U, 104U },
-  { 371U, 137U }, { 376U, 172U }, { 371U, 207U }, { 358U, 240U }
-};
-
-/*
- * Inner ring points make the gauge read as a circular instrument even at 0 MPH.
- * They are a fixed ellipse so no runtime trig or floating point is needed.
- * The ring is decorative/static; the outer arc is the live speed indicator.
- */
-static const uint16_t gauge_ring_xy[25][2] = {
-  { 110U, 218U }, {  99U, 200U }, {  92U, 181U }, {  90U, 162U }, {  92U, 143U },
-  {  99U, 124U }, { 110U, 106U }, { 125U,  90U }, { 144U,  76U }, { 165U,  65U },
-  { 189U,  57U }, { 214U,  52U }, { 240U,  50U }, { 266U,  52U }, { 291U,  57U },
-  { 315U,  65U }, { 336U,  76U }, { 355U,  90U }, { 370U, 106U }, { 381U, 124U },
-  { 388U, 143U }, { 390U, 162U }, { 388U, 181U }, { 381U, 200U }, { 370U, 218U }
-};
+static uint8_t last_sweep_percent = 0xFFU;
+static uint8_t last_digit_count = 0U;
+static uint8_t last_digit_values[3] = { 0U, 0U, 0U };
+static uint16_t last_digit_x[3] = { 0U, 0U, 0U };
 
 /*
  * Heavy 5x7 block digit font. Each byte uses the low five bits as columns.
@@ -118,11 +97,16 @@ static void DrawDigit(uint16_t x, uint16_t y, uint8_t digit, uint16_t color)
        */
       if ((digit_rows[digit][row] & (uint8_t)(1U << (4U - col))) != 0U)
       {
-        ST7796_FillRect((uint16_t)(x + (col * (DIGIT_CELL_W + DIGIT_CELL_G))),
-                        (uint16_t)(y + (row * (DIGIT_CELL_H + DIGIT_CELL_G))),
-                        DIGIT_CELL_W,
-                        DIGIT_CELL_H,
-                        color);
+        /*
+         * Rounded cells cost more SPI work than plain rectangles, but they make
+         * the custom digit font feel less blocky while keeping the font tiny.
+         */
+        ST7796_FillRoundRect((uint16_t)(x + (col * (DIGIT_CELL_W + DIGIT_CELL_G))),
+                             (uint16_t)(y + (row * (DIGIT_CELL_H + DIGIT_CELL_G))),
+                             DIGIT_CELL_W,
+                             DIGIT_CELL_H,
+                             3U,
+                             color);
       }
     }
   }
@@ -162,15 +146,16 @@ static void DrawMphLabel(void)
 
 static void DrawGaugeRing(void)
 {
-  uint8_t i;
-
-  for (i = 0U; i < 25U; i++)
-  {
-    uint16_t x = gauge_ring_xy[i][0];
-    uint16_t y = gauge_ring_xy[i][1];
-
-    ST7796_FillRect((uint16_t)(x - 3U), (uint16_t)(y - 3U), 6U, 6U, DASH_DIM);
-  }
+  /*
+   * Keep the static gauge furniture quiet: one outer bezel and one subtle inner
+   * line. The live speed sweep is what should catch the eye.
+   *
+   * DASH_GAUGE_BORDER is a light grey RGB565 value. Because this border is
+   * static, it costs time only during startup, not during sensor acquisition.
+   */
+  ST7796_DrawThickArc(240, 163, 151, 145, 395, 3U, 2U, DASH_PANEL);
+  ST7796_DrawThickArc(240, 163, 146, 145, 395, 2U, 2U, DASH_GAUGE_BORDER);
+  ST7796_DrawArc(240, 163, 119, 155, 385, 4U, DASH_DIM);
 }
 
 static uint16_t GaugeColorForMph(uint16_t mph)
@@ -191,57 +176,28 @@ static uint16_t GaugeColorForMph(uint16_t mph)
   return DASH_RED;
 }
 
-static void DrawArcBlock(uint8_t index, uint8_t active)
-{
-  uint16_t x;
-  uint16_t y;
-  uint16_t color;
-
-  if (index >= 17U)
-  {
-    return;
-  }
-
-  x = arc_block_xy[index][0];
-  y = arc_block_xy[index][1];
-  /*
-   * The block index maps directly to speed because each block is ARC_STEP_MPH.
-   * Example: index 8 means about 40 MPH.
-   */
-  color = active ? GaugeColorForMph((uint16_t)(index * ARC_STEP_MPH)) : DASH_ARC_OFF;
-
-  ST7796_FillRect((uint16_t)(x - (ARC_BLOCK / 2U)),
-                  (uint16_t)(y - (ARC_BLOCK / 2U)),
-                  ARC_BLOCK,
-                  ARC_BLOCK,
-                  color);
-}
-
 static void DrawGaugeScale(void)
 {
-  uint16_t i;
+  /*
+   * Draw the unlit sweep once. DrawSpeedSweep() later paints live color over the
+   * same path. Angle 145 is lower-left; 395 wraps around through the top and
+   * ends at lower-right.
+   */
+  ST7796_DrawThickArc(240, 163, 136, 145, 395, 7U, 2U, DASH_ARC_OFF);
 
-  for (i = 0U; i < 17U; i++)
-  {
-    DrawArcBlock((uint8_t)i, 0U);
-  }
+  /* Five quiet reference ticks: 0, 20, 40, 60, and 80 MPH. */
+  ST7796_DrawGaugeTicks(240, 163, 126, 141, 145, 395, 5U, 1U, DASH_DIM, DASH_BEZEL);
 
-  /* Major reference ticks at 0, 20, 40, 60, and 80 MPH. */
-  for (i = 0U; i < 5U; i++)
-  {
-    uint8_t index = (uint8_t)(i * 4U);
-    uint16_t x = arc_block_xy[index][0];
-    uint16_t y = arc_block_xy[index][1];
-
-    ST7796_FillRect((uint16_t)(x - 9U), (uint16_t)(y - 9U), 18U, 18U, DASH_DIM);
-    ST7796_FillRect((uint16_t)(x - 4U), (uint16_t)(y - 4U), 8U, 8U, DASH_WHITE);
-  }
+  /*
+   * Tiny max-speed label at the end of the arc. The gauge currently maps
+   * 0..MPH_MAX onto the sweep, so this number marks the right-end limit.
+   */
+  ST7796_DrawString5x7(372U, 224U, "80", DASH_GAUGE_BORDER, DASH_BG, 2U, 0U);
 }
 
-static void DrawSpeedArc(uint16_t mph)
+static void DrawSpeedSweep(uint16_t mph)
 {
-  uint8_t active_blocks;
-  uint8_t i;
+  int16_t active_end;
 
   if (mph > MPH_MAX)
   {
@@ -249,35 +205,45 @@ static void DrawSpeedArc(uint16_t mph)
   }
 
   /*
-   * Add one so 0 MPH still lights the first block. That gives the gauge a
-   * visible starting point instead of disappearing at rest.
+   * Redraw the full sweep in the off color, then redraw the active part. This
+   * handles both acceleration and deceleration without needing a frame buffer.
    */
-  active_blocks = (uint8_t)((mph / ARC_STEP_MPH) + 1U);
-  if (active_blocks > 17U)
+  ST7796_DrawThickArc(240, 163, 136, 145, 395, 9U, 2U, DASH_ARC_OFF);
+  active_end = (int16_t)(145 + (((uint32_t)250U * mph) / MPH_MAX));
+  if (active_end <= 145)
   {
-    active_blocks = 17U;
+    active_end = 148;
+  }
+  ST7796_DrawThickArc(240, 163, 136, 145, active_end, 9U, 2U, GaugeColorForMph(mph));
+}
+
+static void DrawSpeedArc(uint16_t mph, uint8_t force_redraw)
+{
+  uint8_t sweep_percent;
+
+  if (mph > MPH_MAX)
+  {
+    mph = MPH_MAX;
   }
 
-  if (active_blocks == last_arc_blocks)
+  sweep_percent = (uint8_t)(((uint32_t)mph * 100U) / MPH_MAX);
+  if ((force_redraw == 0U) && (sweep_percent == last_sweep_percent))
   {
     return;
   }
 
-  for (i = 0U; i < 17U; i++)
-  {
-    DrawArcBlock(i, (i < active_blocks) ? 1U : 0U);
-  }
-
-  last_arc_blocks = active_blocks;
+  DrawSpeedSweep(mph);
+  last_sweep_percent = sweep_percent;
 }
 
 static void DrawStatusBox(uint16_t x, uint8_t active, uint16_t active_color)
 {
-  ST7796_FillRect(x, 282U, 42U, 18U, active ? active_color : DASH_DARK);
-  ST7796_FillRect(x, 282U, 42U, 2U, DASH_WHITE);
-  ST7796_FillRect(x, 298U, 42U, 2U, DASH_WHITE);
-  ST7796_FillRect(x, 282U, 2U, 18U, DASH_WHITE);
-  ST7796_FillRect(x + 40U, 282U, 2U, 18U, DASH_WHITE);
+  /*
+   * Rounded diagnostic pills: RX byte, complete NMEA line, valid fix.
+   * The white backing is slightly larger, acting like a border.
+   */
+  ST7796_FillRoundRect(x, 282U, 42U, 18U, 8U, DASH_WHITE);
+  ST7796_FillRoundRect((uint16_t)(x + 3U), 285U, 36U, 12U, 6U, active ? active_color : DASH_DARK);
 }
 
 static uint8_t MakeDigitList(uint16_t mph, uint8_t digits[3])
@@ -305,6 +271,24 @@ static uint8_t MakeDigitList(uint16_t mph, uint8_t digits[3])
   return 1U;
 }
 
+static void ErasePreviousSpeedDigits(void)
+{
+  uint8_t i;
+
+  /*
+   * Do not clear one giant digit rectangle: the gauge arc passes behind this
+   * area, so a blunt black rectangle visibly chops the ring. Instead, erase
+   * only the lit cells from the previous number, then the caller restores the
+   * gauge arcs before drawing the new number.
+   */
+  for (i = 0U; i < last_digit_count; i++)
+  {
+    DrawDigit(last_digit_x[i], DIGIT_Y, last_digit_values[i], DASH_BG);
+  }
+
+  last_digit_count = 0U;
+}
+
 /*
  * Redraw the complete digit band so one-, two-, and three-digit speeds can stay
  * visually centered instead of living in fixed right-aligned slots.
@@ -326,12 +310,16 @@ static void DrawSpeedDigits(uint16_t mph)
   number_w = (uint16_t)((digit_count * DIGIT_W) + ((digit_count - 1U) * DIGIT_GAP));
   x = (uint16_t)(DIGIT_CENTER_X - (number_w / 2U));
 
-  ST7796_FillRect(DIGIT_AREA_X, DIGIT_Y, DIGIT_AREA_W, DIGIT_H, DASH_BG);
-
   for (i = 0U; i < digit_count; i++)
   {
-    DrawDigit((uint16_t)(x + (i * (DIGIT_W + DIGIT_GAP))), DIGIT_Y, digits[i], DASH_WHITE);
+    uint16_t digit_x = (uint16_t)(x + (i * (DIGIT_W + DIGIT_GAP)));
+
+    DrawDigit(digit_x, DIGIT_Y, digits[i], DASH_WHITE);
+    last_digit_values[i] = digits[i];
+    last_digit_x[i] = digit_x;
   }
+
+  last_digit_count = digit_count;
 }
 
 void DashUI_Init(void)
@@ -341,7 +329,8 @@ void DashUI_Init(void)
   last_gps_rx = 0xFFU;
   last_gps_line = 0xFFU;
   last_gps_fix = 0xFFU;
-  last_arc_blocks = 0xFFU;
+  last_sweep_percent = 0xFFU;
+  last_digit_count = 0U;
 
   /*
    * Static dashboard background: border, circular gauge arc, label, and
@@ -352,7 +341,6 @@ void DashUI_Init(void)
   ST7796_FillRect(0U, ST7796_HEIGHT - 6U, ST7796_WIDTH, 6U, DASH_WHITE);
   ST7796_FillRect(0U, 0U, 6U, ST7796_HEIGHT, DASH_WHITE);
   ST7796_FillRect(ST7796_WIDTH - 6U, 0U, 6U, ST7796_HEIGHT, DASH_WHITE);
-  ST7796_FillRect(32U, 268U, 416U, 4U, DASH_DIM);
 
   DrawGaugeRing();
   DrawGaugeScale();
@@ -374,8 +362,18 @@ void DashUI_UpdateSpeed(uint16_t mph)
     return;
   }
 
+  /*
+   * Draw order matters on a no-framebuffer TFT:
+   * 1. erase only the previous digit cells,
+   * 2. restore any gauge arcs/ticks that the clear rectangle erased,
+   * 3. redraw the live sweep,
+   * 4. draw the speed digits on top.
+   */
+  ErasePreviousSpeedDigits();
+  DrawGaugeRing();
+  DrawGaugeScale();
+  DrawSpeedArc(mph, 1U);
   DrawSpeedDigits(mph);
-  DrawSpeedArc(mph);
   last_mph = mph;
 }
 
