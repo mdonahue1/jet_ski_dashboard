@@ -11,7 +11,7 @@
 ../Core/Src/dash_ui.c:239:13:DrawStatusBox	24	static
 ../Core/Src/dash_ui.c:249:16:MakeDigitList	16	static
 ../Core/Src/dash_ui.c:274:13:ErasePreviousSpeedDigits	16	static
-../Core/Src/dash_ui.c:296:13:DrawSpeedDigits	32	static
-../Core/Src/dash_ui.c:325:6:DashUI_Init	16	static
-../Core/Src/dash_ui.c:351:6:DashUI_UpdateSpeed	16	static
-../Core/Src/dash_ui.c:380:6:DashUI_UpdateGpsStatus	16	static
+../Core/Src/dash_ui.c:295:13:DrawSpeedDigits	32	static
+../Core/Src/dash_ui.c:324:6:DashUI_Init	16	static
+../Core/Src/dash_ui.c:350:6:DashUI_UpdateSpeed	16	static
+../Core/Src/dash_ui.c:374:6:DashUI_UpdateGpsStatus	16	static

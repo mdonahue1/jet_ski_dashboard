@@ -276,10 +276,9 @@ static void ErasePreviousSpeedDigits(void)
   uint8_t i;
 
   /*
-   * Do not clear one giant digit rectangle: the gauge arc passes behind this
-   * area, so a blunt black rectangle visibly chops the ring. Instead, erase
-   * only the lit cells from the previous number, then the caller restores the
-   * gauge arcs before drawing the new number.
+   * Do not clear one giant digit rectangle: that was visibly chopping the
+   * gauge. Erasing only the lit cells from the previous number is much less
+   * SPI work and avoids the big black wipe during 0/1/2 MPH bench changes.
    */
   for (i = 0U; i < last_digit_count; i++)
   {
@@ -363,16 +362,11 @@ void DashUI_UpdateSpeed(uint16_t mph)
   }
 
   /*
-   * Draw order matters on a no-framebuffer TFT:
-   * 1. erase only the previous digit cells,
-   * 2. restore any gauge arcs/ticks that the clear rectangle erased,
-   * 3. redraw the live sweep,
-   * 4. draw the speed digits on top.
+   * Draw order matters on a no-framebuffer TFT. Keep the static gauge artwork
+   * out of the live update path so speed changes feel quicker over SPI.
    */
   ErasePreviousSpeedDigits();
-  DrawGaugeRing();
-  DrawGaugeScale();
-  DrawSpeedArc(mph, 1U);
+  DrawSpeedArc(mph, 0U);
   DrawSpeedDigits(mph);
   last_mph = mph;
 }

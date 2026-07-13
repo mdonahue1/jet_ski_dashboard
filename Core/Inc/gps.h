@@ -31,6 +31,13 @@ typedef struct
 /* Start byte-by-byte UART reception from the GPS module. */
 void GPS_Init(UART_HandleTypeDef *huart);
 
+/*
+ * Try to configure the GPS module for faster NMEA output.
+ * rx_uart is the UART used to listen to GPS TX.
+ * tx_uart is a separate UART whose TX pin is wired to GPS RX.
+ */
+void GPS_SendStartupConfig(UART_HandleTypeDef *tx_uart);
+
 /* Called from the main loop. Parses any complete NMEA sentence captured by the IRQ. */
 void GPS_Task(void);
 

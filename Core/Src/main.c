@@ -164,6 +164,15 @@ int main(void)
 #if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
   GPS_DebugRawPa3Init();
 #else
+  /*
+   * Try to put the GPS into a faster 10 Hz update mode before starting RX.
+   * Command path wiring required for this:
+   *   Nucleo PA2 / Arduino D1 / USART2_TX -> GPS RX
+   *
+   * GPS data still comes back on:
+   *   GPS TX -> PA10 / Arduino D2 / USART1_RX
+   */
+  GPS_SendStartupConfig(&huart2);
   GPS_Init(&huart1);
 #endif
 

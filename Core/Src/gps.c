@@ -2,6 +2,7 @@
 #include <string.h>
 
 #define GPS_LINE_MAX 96U
+#define GPS_COMMAND_MAX 96U
 
 /*
  * gps_uart points to whichever UART main.c selected for the GPS module.
@@ -29,6 +30,80 @@ static volatile uint8_t line_ready = 0U;
 static char ready_line[GPS_LINE_MAX];
 
 static GPS_Data_t gps_data = { 0U };
+
+static char HexNibble(uint8_t value)
+{
+  value &= 0x0FU;
+  if (value < 10U)
+  {
+    return (char)('0' + value);
+  }
+
+  return (char)('A' + (value - 10U));
+}
+
+static uint8_t BuildNmeaCommand(const char *payload, char *out, uint8_t out_size)
+{
+  uint8_t checksum = 0U;
+  uint8_t i = 0U;
+  uint8_t out_index = 0U;
+
+  if ((payload == 0) || (out == 0) || (out_size < 7U))
+  {
+    return 0U;
+  }
+
+  /*
+   * GPS configuration commands use the same wrapper style as NMEA sentences:
+   *   $PAYLOAD*CS<CR><LF>
+   * CS is an XOR of every payload byte between '$' and '*'.
+   */
+  out[out_index++] = '$';
+  while ((payload[i] != '\0') && (out_index < (uint8_t)(out_size - 6U)))
+  {
+    checksum ^= (uint8_t)payload[i];
+    out[out_index++] = payload[i++];
+  }
+
+  if (payload[i] != '\0')
+  {
+    return 0U;
+  }
+
+  out[out_index++] = '*';
+  out[out_index++] = HexNibble((uint8_t)(checksum >> 4));
+  out[out_index++] = HexNibble(checksum);
+  out[out_index++] = '\r';
+  out[out_index++] = '\n';
+  out[out_index] = '\0';
+
+  return out_index;
+}
+
+static void SendNmeaCommand(UART_HandleTypeDef *tx_uart, const char *payload)
+{
+  char command[GPS_COMMAND_MAX];
+  uint8_t length;
+
+  if (tx_uart == 0)
+  {
+    return;
+  }
+
+  length = BuildNmeaCommand(payload, command, sizeof(command));
+  if (length == 0U)
+  {
+    return;
+  }
+
+  /*
+   * This is a short blocking transmit during startup only. It does not affect
+   * steady-state GPS receive performance because normal GPS data is interrupt
+   * driven after GPS_Init() arms RX.
+   */
+  (void)HAL_UART_Transmit(tx_uart, (uint8_t *)command, length, 100U);
+  HAL_Delay(50U);
+}
 
 static void ArmGpsReceive(void)
 {
@@ -257,6 +332,32 @@ void GPS_Init(UART_HandleTypeDef *huart)
 
   /* Arm the first 1-byte receive. Each completed byte re-arms reception in the callback. */
   ArmGpsReceive();
+}
+
+void GPS_SendStartupConfig(UART_HandleTypeDef *tx_uart)
+{
+  /*
+   * ATGM336H-style modules are commonly based on CASIC/ATGM firmware, while
+   * many hobby GPS examples use MediaTek PMTK commands. Sending both families
+   * is harmless in practice: unsupported commands are ignored by the receiver.
+   *
+   * Important wiring note:
+   * - GPS TX -> PA10 / USART1_RX for data into the STM32.
+   * - STM32 PA2 / USART2_TX -> GPS RX for these configuration commands.
+   *
+   * We keep the baud rate at 9600 for this first 10 Hz attempt. If the module
+   * starts outputting too many sentences and UART error_count rises, the next
+   * step is changing the GPS and STM32 UARTs together to 38400 or 115200 baud
+   * and reducing the enabled sentence set.
+   */
+
+  /* PMTK: output only RMC and VTG if accepted, then request 100 ms updates. */
+  SendNmeaCommand(tx_uart, "PMTK314,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+  SendNmeaCommand(tx_uart, "PMTK220,100");
+  SendNmeaCommand(tx_uart, "PMTK300,100,0,0,0,0");
+
+  /* CASIC/ATGM PCAS: request a 100 ms positioning/output interval if accepted. */
+  SendNmeaCommand(tx_uart, "PCAS02,100");
 }
 
 void GPS_Task(void)

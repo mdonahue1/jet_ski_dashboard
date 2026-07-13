@@ -76,8 +76,13 @@ Current design:
 - Heavy block digits drawn from a tiny custom 5x7 bitmap digit font.
 - GPS diagnostic bars are near the lower center under the MPH label.
 - The display driver has no framebuffer. Drawing is direct over SPI using filled rectangles and pixels.
-- The UI now uses smoother primitives where useful: a quiet outer arc, thick swept speed arc, a few radial reference ticks, rounded diagnostic pills, a slim horizontal speed bar, and lightly rounded digit cells.
+- The UI now uses smoother primitives where useful: a quiet outer arc, light grey gauge border, thick swept speed arc, a few radial reference ticks, rounded diagnostic pills, and lightly rounded digit cells.
 - The top decorative LED row and dense circular dot clutter were removed because they made the speedometer screen too busy.
+- The bottom horizontal speed bar was removed to keep the MPH screen cleaner.
+- Speed digit redraw now erases only the old digit cells, then restores gauge arcs/ticks, so the gauge ring is not damaged by a large black clear rectangle.
+- GPS startup now calls `GPS_SendStartupConfig(&huart2)` before `GPS_Init(&huart1)` to attempt 10 Hz output.
+- 10 Hz command wiring requires Nucleo PA2 / Arduino D1 / USART2_TX connected to GPS RX.
+- The first 10 Hz attempt keeps baud at 9600 and sends both PMTK and PCAS/CASIC-style commands. If data drops or UART errors rise, the next step is a coordinated GPS + STM32 baud-rate change to 38400 or 115200 plus reduced sentence output.
 - `st7796.c` now also exposes helper primitives for future UI polish:
   - `ST7796_RGB565`
   - `ST7796_DimColor`
