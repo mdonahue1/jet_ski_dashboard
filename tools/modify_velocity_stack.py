@@ -54,6 +54,16 @@ VARIANTS = {
         "depth": 0.55,
         "rounded_lip": True,
     },
+    "map_clip": {
+        "label": "G_rounded_dimpled_MAP_snap_mount",
+        "rows": [
+            -71.5, -67.5, -63.5, -59.5, -55.5,
+            -51.5, -47.5, -43.5, -39.5, -35.5,
+        ],
+        "depth": 0.55,
+        "rounded_lip": True,
+        "map_mount": True,
+    },
 }
 VARIANT_KEY = "full"
 if "--" in sys.argv:
@@ -267,6 +277,127 @@ def apply_dimples(body, cutter):
     print("NONMANIFOLD_EDGES", nonmanifold)
 
 
+def add_box(name, location, dimensions):
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=location)
+    obj = bpy.context.object
+    obj.name = name
+    obj.dimensions = dimensions
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    return obj
+
+
+def add_x_cylinder(name, center, radius, depth, vertices=64):
+    bpy.ops.mesh.primitive_cylinder_add(
+        vertices=vertices,
+        radius=radius,
+        depth=depth,
+        location=center,
+        rotation=(0.0, math.pi / 2.0, 0.0),
+    )
+    obj = bpy.context.object
+    obj.name = name
+    return obj
+
+
+def boolean_apply(body, tool, operation, label):
+    bpy.context.view_layer.objects.active = body
+    body.select_set(True)
+    tool.select_set(False)
+    modifier = body.modifiers.new(name=label, type="BOOLEAN")
+    modifier.operation = operation
+    modifier.solver = "EXACT"
+    modifier.object = tool
+    bpy.ops.object.modifier_apply(modifier=modifier.name)
+    bpy.data.objects.remove(tool, do_unlink=True)
+    body.data.validate(verbose=True)
+    body.data.update()
+
+
+def add_map_snap_mount(body):
+    # Photo-measured holder for Bosch 0 261 230 042 / DS-S2-TF:
+    #   overall width 42.76 mm, body height 22.41 mm,
+    #   body thickness 6.37 mm, sensing nose 11.88 mm.
+    # The flat sensor seats against a tangent backplate. Split lower ledges
+    # leave the connector open, while the top cantilever snaps over its face.
+    pickup_z = 32.0
+    pickup_y = -5.5
+    seat_x = 51.5
+
+    positive_parts = [
+        # Wide, shallow sealing pad follows the sensor's flat housing.
+        add_box(
+            "MAP_Sealing_Backplate",
+            ((39.0 + seat_x) * 0.5, 0.0, pickup_z),
+            (seat_x - 39.0, 49.0, 29.0),
+        ),
+        # Narrow side guides locate the measured 42.76 mm overall width.
+        add_box("MAP_Guide_Left", (56.0, -22.1, pickup_z), (9.0, 2.8, 26.0)),
+        add_box("MAP_Guide_Right", (56.0, 22.1, pickup_z), (9.0, 2.8, 26.0)),
+        # Two corner ledges carry the sensor while leaving its connector open.
+        add_box("MAP_Lower_Ledge_Left", (56.0, -16.5, pickup_z - 12.5), (9.0, 10.0, 3.0)),
+        add_box("MAP_Lower_Ledge_Right", (56.0, 16.5, pickup_z - 12.5), (9.0, 10.0, 3.0)),
+        # A central cantilever flexes upward as the 6.37 mm body is pushed in.
+        add_box("MAP_Tab_Root", (50.0, 0.0, pickup_z + 15.0), (4.0, 10.0, 9.0)),
+        add_box("MAP_Tab_Arm", (56.5, 0.0, pickup_z + 18.3), (13.0, 10.0, 2.4)),
+        add_box("MAP_Tab_Hook", (62.0, 0.0, pickup_z + 15.6), (2.0, 10.0, 5.5)),
+    ]
+    for index, part in enumerate(positive_parts):
+        boolean_apply(body, part, "UNION", f"MAP mount union {index + 1}")
+
+    # The measured sensing cage is 11.88 mm. A 12.4 mm guide bore accepts it;
+    # the larger 14.2 mm mouth gives the green O-ring a lead-in and sealing
+    # land. Final sealing interference can be tuned after a short test print.
+    o_ring_land = add_x_cylinder(
+        "MAP_ORing_Land",
+        (49.0, pickup_y, pickup_z),
+        7.1,
+        8.0,
+    )
+    boolean_apply(body, o_ring_land, "DIFFERENCE", "MAP O-ring sealing land")
+    probe_socket = add_x_cylinder(
+        "MAP_Probe_Socket",
+        (44.5, pickup_y, pickup_z),
+        6.2,
+        9.0,
+    )
+    boolean_apply(body, probe_socket, "DIFFERENCE", "MAP stepped probe socket")
+    pressure_gallery = add_x_cylinder(
+        "MAP_Pressure_Gallery",
+        (38.5, pickup_y, pickup_z),
+        1.2,
+        12.0,
+        vertices=48,
+    )
+    boolean_apply(body, pressure_gallery, "DIFFERENCE", "MAP pressure gallery")
+    print(
+        "MAP_MOUNT",
+        "PROBE_BORE_MM", 12.4,
+        "ORING_LAND_MM", 14.2,
+        "GALLERY_MM", 2.4,
+        "GUIDE_INSIDE_MM", 42.8,
+        "BODY_HEIGHT_MM", 22.4,
+        "BODY_THICKNESS_MM", 6.4,
+        "PICKUP_Z_MM", pickup_z,
+        "PICKUP_Y_MM", pickup_y,
+    )
+
+
+def weld_boolean_roundoff(body):
+    # Exact booleans can leave coincident vertices a few ten-thousandths of a
+    # millimetre apart in the dense dimple mesh. Welding only within 1 micron
+    # removes those export degeneracies without changing printable geometry.
+    bm = bmesh.new()
+    bm.from_mesh(body.data)
+    before = len(bm.verts)
+    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.001)
+    bm.normal_update()
+    bm.to_mesh(body.data)
+    bm.free()
+    body.data.validate(verbose=True)
+    body.data.update()
+    print("BOOLEAN_WELD_VERTICES", before - len(body.data.vertices))
+
+
 def write_binary_stl(obj, path):
     mesh = obj.data
     mesh.calc_loop_triangles()
@@ -362,6 +493,15 @@ def render_preview(body):
     camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
     scene.render.filepath = os.path.join(OUTPUT_DIR, f"{VARIANT['label']}_preview.png")
     bpy.ops.render.render(write_still=True)
+    if VARIANT.get("map_mount", False):
+        target = Vector((47, 0, 30))
+        camera.location = Vector((155, -125, 82))
+        camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+        camera.data.ortho_scale = 105
+        scene.render.filepath = os.path.join(
+            OUTPUT_DIR, f"{VARIANT['label']}_mount_preview.png"
+        )
+        bpy.ops.render.render(write_still=True)
 
 
 def main():
@@ -380,6 +520,9 @@ def main():
         apply_dimples(body, cutter)
     else:
         print("DIMPLE_COUNT", 0)
+    if VARIANT.get("map_mount", False):
+        add_map_snap_mount(body)
+        weld_boolean_roundoff(body)
 
     write_binary_stl(body, OUTPUT_STL)
     replace_object_mesh(model_root, "1", body, components["1"].inverted())

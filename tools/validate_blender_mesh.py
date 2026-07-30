@@ -11,7 +11,8 @@ if args:
 obj = next(obj for obj in bpy.data.objects if obj.type == "MESH")
 bm = bmesh.new()
 bm.from_mesh(obj.data)
-bad_edges = sum(1 for edge in bm.edges if len(edge.link_faces) != 2)
+bad_edge_list = [edge for edge in bm.edges if len(edge.link_faces) != 2]
+bad_edges = len(bad_edge_list)
 components = 0
 remaining = set(bm.verts)
 component_bounds = []
@@ -37,4 +38,13 @@ print(
     "NONMANIFOLD_EDGES", bad_edges, "COMPONENTS", components,
     "COMPONENT_BOUNDS", component_bounds
 )
+if bad_edge_list:
+    print("NONMANIFOLD_EDGE_COORDS", [
+        (
+            tuple(round(value, 4) for value in edge.verts[0].co),
+            tuple(round(value, 4) for value in edge.verts[1].co),
+            len(edge.link_faces),
+        )
+        for edge in bad_edge_list[:30]
+    ])
 bm.free()
