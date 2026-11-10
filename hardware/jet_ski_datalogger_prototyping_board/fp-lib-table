@@ -1,0 +1,5 @@
+(fp_lib_table
+	(version 7)
+	(lib (name "Library") (type "KiCad") (uri "C:/Users/miner/OPL_Kicad_Library/Library.pretty") (options "") (descr ""))
+	(lib (name "New_XIAO_Series_Footprints") (type "KiCad") (uri "C:/Users/miner/Downloads/New_XIAO_Series_Footprints/New_XIAO_Series_Footprints.pretty") (options "") (descr ""))
+)
