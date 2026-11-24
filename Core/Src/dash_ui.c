@@ -1,5 +1,7 @@
 #include "dash_ui.h"
 #include "st7796.h"
+#include <stdio.h>
+#include <string.h>
 
 /* Screen colors are RGB565. Named UI colors keep layout code readable. */
 #define DASH_BG       ST7796_BLACK
@@ -40,6 +42,8 @@
 
 /* 0xFFFF means "force the first update" because no real MPH value can equal it. */
 static uint16_t last_mph = 0xFFFFU;
+static uint16_t last_heading = 0xFFFFU;
+static uint8_t last_heading_valid = 0xFFU;
 /*
  * These cached status values avoid repainting small rectangles when nothing
  * changed. SPI display writes are much slower than normal CPU math, so caching
@@ -48,6 +52,24 @@ static uint16_t last_mph = 0xFFFFU;
 static uint8_t last_gps_rx = 0xFFU;
 static uint8_t last_gps_line = 0xFFU;
 static uint8_t last_gps_fix = 0xFFU;
+static uint8_t last_sd_ready = 0xFFU;
+static uint8_t last_esp_online = 0xFFU;
+static uint16_t last_wifi_count = 0xFFFFU;
+static uint32_t last_scan_id = 0xFFFFFFFFUL;
+static uint32_t last_uart_lines = 0xFFFFFFFFUL;
+static uint8_t custom_mode = 0U;
+static int32_t last_latitude_e7 = INT32_MAX;
+static int32_t last_longitude_e7 = INT32_MAX;
+static int16_t last_altitude_m = INT16_MAX;
+static uint8_t last_position_valid = 0xFFU;
+static uint8_t last_altitude_valid = 0xFFU;
+static uint8_t last_satellite_count = 0xFFU;
+static uint8_t last_fix_type = 0xFFU;
+static uint8_t last_satellites_in_view = 0xFFU;
+static uint16_t last_hdop = 0xFFFFU;
+static uint16_t last_pdop = 0xFFFFU;
+static uint16_t last_vdop = 0xFFFFU;
+static uint8_t last_snr[4] = { 0xFFU, 0xFFU, 0xFFU, 0xFFU };
 static uint8_t last_sweep_percent = 0xFFU;
 static uint8_t last_digit_count = 0U;
 static uint8_t last_digit_values[3] = { 0U, 0U, 0U };
@@ -323,11 +345,22 @@ static void DrawSpeedDigits(uint16_t mph)
 
 void DashUI_Init(void)
 {
+  custom_mode = 0U;
   /* Force a clean first speed redraw after the static screen is painted. */
   last_mph = 0xFFFFU;
+  last_heading = 0xFFFFU;
+  last_heading_valid = 0xFFU;
   last_gps_rx = 0xFFU;
   last_gps_line = 0xFFU;
   last_gps_fix = 0xFFU;
+  last_sd_ready = 0xFFU;
+  last_esp_online = 0xFFU;
+  last_wifi_count = 0xFFFFU;
+  last_scan_id = 0xFFFFFFFFUL;
+  last_uart_lines = 0xFFFFFFFFUL;
+  last_position_valid = 0xFFU;
+  last_altitude_valid = 0xFFU;
+  last_satellite_count = 0xFFU;
   last_sweep_percent = 0xFFU;
   last_digit_count = 0U;
 
@@ -345,10 +378,20 @@ void DashUI_Init(void)
   DrawGaugeScale();
   DrawMphLabel();
   DashUI_UpdateGpsStatus(0U, 0U, 0U);
+  DashUI_UpdateSdStatus(0U);
+  DashUI_UpdateEspStatus(0U);
+  DashUI_UpdateWifiCount(0U);
+  /* Always leave a visible speed value, even before GPS has a valid fix. */
+  DashUI_UpdateSpeed(0U);
+  DashUI_UpdateHeading(0U, 0U);
 }
 
 void DashUI_UpdateSpeed(uint16_t mph)
 {
+  if (custom_mode != 0U)
+  {
+    return;
+  }
   /* Keep wild test/GPS values from drawing outside the three-digit area. */
   if (mph > 199U)
   {
@@ -369,6 +412,37 @@ void DashUI_UpdateSpeed(uint16_t mph)
   DrawSpeedArc(mph, 0U);
   DrawSpeedDigits(mph);
   last_mph = mph;
+}
+
+void DashUI_UpdateHeading(uint8_t valid, uint16_t heading_deg)
+{
+  char label[8];
+
+  if (custom_mode != 0U)
+  {
+    return;
+  }
+
+  valid = (valid != 0U) ? 1U : 0U;
+  heading_deg %= 360U;
+  if ((valid == last_heading_valid) && ((!valid) || (heading_deg == last_heading)))
+  {
+    return;
+  }
+
+  if (valid != 0U)
+  {
+    (void)snprintf(label, sizeof(label), "HDG %03u", heading_deg);
+  }
+  else
+  {
+    (void)snprintf(label, sizeof(label), "HDG ---");
+  }
+
+  ST7796_FillRect(194U, 12U, 92U, 22U, DASH_BG);
+  ST7796_DrawString5x7(198U, 16U, label, valid ? DASH_BLUE : DASH_DIM, DASH_BG, 2U, 0U);
+  last_heading_valid = valid;
+  last_heading = heading_deg;
 }
 
 void DashUI_UpdateGpsStatus(uint8_t has_rx, uint8_t has_line, uint8_t has_fix)
@@ -394,4 +468,273 @@ void DashUI_UpdateGpsStatus(uint8_t has_rx, uint8_t has_line, uint8_t has_fix)
     DrawStatusBox(268U, has_fix, DASH_GREEN);
     last_gps_fix = has_fix;
   }
+}
+
+void DashUI_UpdateSdStatus(uint8_t card_ready)
+{
+  card_ready = (card_ready != 0U) ? 1U : 0U;
+  if (card_ready == last_sd_ready)
+  {
+    return;
+  }
+
+  /* Compact top-left badge, clear of the speed digits and GPS pills. */
+  ST7796_FillRoundRect(12U, 12U, 62U, 22U, 5U, card_ready ? DASH_GREEN : DASH_ORANGE);
+  ST7796_DrawString5x7(19U,
+                      16U,
+                      card_ready ? "SD OK" : "NO SD",
+                      DASH_BG,
+                      card_ready ? DASH_GREEN : DASH_ORANGE,
+                      2U,
+                      0U);
+  last_sd_ready = card_ready;
+}
+
+void DashUI_UpdateEspStatus(uint8_t esp_online)
+{
+  esp_online = (esp_online != 0U) ? 1U : 0U;
+  if (esp_online == last_esp_online)
+  {
+    return;
+  }
+
+  /* Top-right companion to the SD badge. Green requires fresh parsed heartbeats. */
+  ST7796_FillRoundRect(386U, 12U, 82U, 22U, 5U, esp_online ? DASH_GREEN : DASH_ORANGE);
+  ST7796_DrawString5x7(393U,
+                      16U,
+                      esp_online ? "ESP OK" : "NO ESP",
+                      DASH_BG,
+                      esp_online ? DASH_GREEN : DASH_ORANGE,
+                      2U,
+                      0U);
+  last_esp_online = esp_online;
+}
+
+void DashUI_UpdateWifiCount(uint16_t network_count)
+{
+  char label[7];
+
+  if (network_count > 999U)
+  {
+    network_count = 999U;
+  }
+  if (custom_mode != 1U)
+  {
+    /* Wi-Fi survey data belongs only on the dedicated custom-mode screen. */
+    last_wifi_count = network_count;
+    return;
+  }
+  if (network_count == last_wifi_count)
+  {
+    return;
+  }
+
+  (void)snprintf(label, sizeof(label), "%03u", network_count);
+  ST7796_FillRect(180U, 58U, 120U, 52U, DASH_BG);
+  ST7796_DrawString5x7(186U, 60U, label, DASH_WHITE, DASH_BG, 6U, 0U);
+  last_wifi_count = network_count;
+}
+
+void DashUI_SetCustomMode(uint8_t enabled)
+{
+  if (enabled > 2U) enabled = 0U;
+  if (enabled == custom_mode)
+  {
+    return;
+  }
+
+  if (enabled == 0U)
+  {
+    DashUI_Init();
+    return;
+  }
+
+  custom_mode = enabled;
+  last_gps_rx = 0xFFU;
+  last_gps_line = 0xFFU;
+  last_gps_fix = 0xFFU;
+  last_sd_ready = 0xFFU;
+  last_esp_online = 0xFFU;
+  last_wifi_count = 0xFFFFU;
+  last_heading = 0xFFFFU;
+  last_heading_valid = 0xFFU;
+  last_scan_id = 0xFFFFFFFFUL;
+  last_uart_lines = 0xFFFFFFFFUL;
+  last_latitude_e7 = INT32_MAX;
+  last_longitude_e7 = INT32_MAX;
+  last_altitude_m = INT16_MAX;
+  last_position_valid = 0xFFU;
+  last_altitude_valid = 0xFFU;
+  last_satellite_count = 0xFFU;
+  last_fix_type = 0xFFU;
+  last_satellites_in_view = 0xFFU;
+  last_hdop = 0xFFFFU;
+  last_pdop = 0xFFFFU;
+  last_vdop = 0xFFFFU;
+  memset(last_snr, 0xFF, sizeof(last_snr));
+
+  ST7796_Fill(DASH_BG);
+  ST7796_DrawRoundRect(6U, 6U, 468U, 308U, 10U, 2U, DASH_BLUE);
+  if (enabled == 1U)
+  {
+    ST7796_DrawString5x7(132U, 18U, "WIFI SCAN MODE", DASH_BLUE, DASH_BG, 3U, 0U);
+    ST7796_DrawString5x7(190U, 116U, "AP FOUND", DASH_DIM, DASH_BG, 2U, 0U);
+    ST7796_DrawString5x7(34U, 230U, "SCAN", DASH_DIM, DASH_BG, 2U, 0U);
+    ST7796_DrawString5x7(338U, 230U, "RX", DASH_DIM, DASH_BG, 2U, 0U);
+    DashUI_UpdateWifiCount(0U);
+  }
+  else
+  {
+    ST7796_DrawString5x7(120U, 18U, "SATELLITE MODE", DASH_BLUE, DASH_BG, 3U, 0U);
+    ST7796_DrawString5x7(62U, 218U, "S1", DASH_DIM, DASH_BG, 2U, 0U);
+    ST7796_DrawString5x7(162U, 218U, "S2", DASH_DIM, DASH_BG, 2U, 0U);
+    ST7796_DrawString5x7(262U, 218U, "S3", DASH_DIM, DASH_BG, 2U, 0U);
+    ST7796_DrawString5x7(362U, 218U, "S4", DASH_DIM, DASH_BG, 2U, 0U);
+  }
+}
+
+void DashUI_UpdateWardriveStats(uint32_t scan_id, uint32_t uart_line_count)
+{
+  char value[11];
+
+  if (custom_mode != 1U)
+  {
+    return;
+  }
+
+  if (scan_id != last_scan_id)
+  {
+    (void)snprintf(value, sizeof(value), "%lu", (unsigned long)scan_id);
+    ST7796_FillRect(34U, 252U, 120U, 18U, DASH_BG);
+    ST7796_DrawString5x7(34U, 252U, value, DASH_WHITE, DASH_BG, 2U, 0U);
+    last_scan_id = scan_id;
+  }
+
+  if (uart_line_count != last_uart_lines)
+  {
+    (void)snprintf(value, sizeof(value), "%lu", (unsigned long)uart_line_count);
+    ST7796_FillRect(338U, 252U, 110U, 18U, DASH_BG);
+    ST7796_DrawString5x7(338U, 252U, value, DASH_WHITE, DASH_BG, 2U, 0U);
+    last_uart_lines = uart_line_count;
+  }
+}
+
+static void FormatCoordinate(char *out, uint8_t out_size, const char *prefix, int32_t coordinate_e7)
+{
+  uint32_t magnitude = (coordinate_e7 < 0) ? (uint32_t)(-(int64_t)coordinate_e7) : (uint32_t)coordinate_e7;
+  (void)snprintf(out,
+                 out_size,
+                 "%s %s%lu.%05lu",
+                 prefix,
+                 (coordinate_e7 < 0) ? "-" : "",
+                 (unsigned long)(magnitude / 10000000UL),
+                 (unsigned long)((magnitude % 10000000UL) / 100UL));
+}
+
+void DashUI_UpdateWardriveGps(uint8_t position_valid,
+                              int32_t latitude_e7,
+                              int32_t longitude_e7,
+                              uint8_t altitude_valid,
+                              int16_t altitude_m,
+                              uint8_t satellite_count)
+{
+  char text[24];
+
+  if (custom_mode != 1U)
+  {
+    return;
+  }
+  position_valid = (position_valid != 0U) ? 1U : 0U;
+  altitude_valid = (altitude_valid != 0U) ? 1U : 0U;
+
+  if ((position_valid != last_position_valid) || (latitude_e7 != last_latitude_e7))
+  {
+    ST7796_FillRect(30U, 148U, 205U, 18U, DASH_BG);
+    if (position_valid != 0U) FormatCoordinate(text, sizeof(text), "LAT", latitude_e7);
+    else (void)snprintf(text, sizeof(text), "LAT ---.-----");
+    ST7796_DrawString5x7(30U, 148U, text, position_valid ? DASH_WHITE : DASH_DIM, DASH_BG, 2U, 0U);
+  }
+  if ((position_valid != last_position_valid) || (longitude_e7 != last_longitude_e7))
+  {
+    ST7796_FillRect(248U, 148U, 205U, 18U, DASH_BG);
+    if (position_valid != 0U) FormatCoordinate(text, sizeof(text), "LON", longitude_e7);
+    else (void)snprintf(text, sizeof(text), "LON ---.-----");
+    ST7796_DrawString5x7(248U, 148U, text, position_valid ? DASH_WHITE : DASH_DIM, DASH_BG, 2U, 0U);
+  }
+  if ((altitude_valid != last_altitude_valid) || (altitude_m != last_altitude_m) ||
+      (satellite_count != last_satellite_count))
+  {
+    ST7796_FillRect(110U, 184U, 270U, 18U, DASH_BG);
+    if (altitude_valid != 0U)
+      (void)snprintf(text, sizeof(text), "ALT %dM  SATS %02u", altitude_m, satellite_count);
+    else
+      (void)snprintf(text, sizeof(text), "ALT ----  SATS %02u", satellite_count);
+    ST7796_DrawString5x7(110U, 184U, text, altitude_valid ? DASH_GREEN : DASH_DIM, DASH_BG, 2U, 0U);
+  }
+
+  last_position_valid = position_valid;
+  last_latitude_e7 = latitude_e7;
+  last_longitude_e7 = longitude_e7;
+  last_altitude_valid = altitude_valid;
+  last_altitude_m = altitude_m;
+  last_satellite_count = satellite_count;
+}
+
+void DashUI_UpdateSatelliteMode(uint8_t fix_type,
+                                uint8_t satellites_used,
+                                uint8_t satellites_in_view,
+                                uint16_t hdop_x100,
+                                uint16_t pdop_x100,
+                                uint16_t vdop_x100,
+                                const uint8_t strongest_snr[4])
+{
+  char text[32];
+  uint8_t i;
+
+  if (custom_mode != 2U) return;
+
+  if ((fix_type != last_fix_type) || (satellites_used != last_satellite_count) ||
+      (satellites_in_view != last_satellites_in_view))
+  {
+    ST7796_FillRect(34U, 55U, 412U, 20U, DASH_BG);
+    (void)snprintf(text, sizeof(text), "FIX %s  USED %02u  VIEW %02u",
+                   (fix_type >= 3U) ? "3D" : ((fix_type == 2U) ? "2D" : "NO"),
+                   satellites_used, satellites_in_view);
+    ST7796_DrawString5x7(34U, 55U, text, (fix_type >= 2U) ? DASH_GREEN : DASH_ORANGE, DASH_BG, 2U, 0U);
+  }
+
+  if ((hdop_x100 != last_hdop) || (pdop_x100 != last_pdop) || (vdop_x100 != last_vdop))
+  {
+    uint16_t estimated_accuracy_x10 = (uint16_t)((hdop_x100 + 10U) / 20U); /* HDOP * ~5 m */
+    ST7796_FillRect(34U, 78U, 412U, 20U, DASH_BG);
+    (void)snprintf(text, sizeof(text), "HDOP %u.%02u  EST ACC %u.%uM",
+                   hdop_x100 / 100U, hdop_x100 % 100U,
+                   estimated_accuracy_x10 / 10U, estimated_accuracy_x10 % 10U);
+    ST7796_DrawString5x7(34U, 78U, text, DASH_WHITE, DASH_BG, 2U, 0U);
+  }
+
+  for (i = 0U; i < 4U; i++)
+  {
+    if (strongest_snr[i] != last_snr[i])
+    {
+      uint16_t x = (uint16_t)(58U + (i * 100U));
+      uint16_t height = (strongest_snr[i] > 55U) ? 100U : (uint16_t)((strongest_snr[i] * 100U) / 55U);
+      ST7796_FillRect(x, 108U, 50U, 102U, DASH_DARK);
+      if (height > 0U)
+      {
+        ST7796_FillRect(x, (uint16_t)(210U - height), 50U, height,
+                       (strongest_snr[i] >= 35U) ? DASH_GREEN : DASH_ORANGE);
+      }
+      (void)snprintf(text, sizeof(text), "%u", strongest_snr[i]);
+      ST7796_DrawString5x7((uint16_t)(x + 8U), 190U, text, DASH_WHITE, DASH_DARK, 2U, 0U);
+      last_snr[i] = strongest_snr[i];
+    }
+  }
+
+  last_fix_type = fix_type;
+  last_satellite_count = satellites_used;
+  last_satellites_in_view = satellites_in_view;
+  last_hdop = hdop_x100;
+  last_pdop = pdop_x100;
+  last_vdop = vdop_x100;
 }

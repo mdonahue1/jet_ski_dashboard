@@ -1,4 +1,5 @@
 #include "gps.h"
+#include "esp_link.h"
 #include <string.h>
 
 #define GPS_LINE_MAX 96U
@@ -169,6 +170,67 @@ static uint16_t CentiKnotsToMph(uint32_t centi_knots)
   return (uint16_t)(((centi_knots * 115078U) + 5000000U) / 10000000U);
 }
 
+static uint32_t ParseUnsignedInteger(const char *text)
+{
+  uint32_t value = 0U;
+  while ((*text >= '0') && (*text <= '9'))
+  {
+    value = (value * 10U) + (uint32_t)(*text - '0');
+    text++;
+  }
+  return value;
+}
+
+/* Convert NMEA ddmm.mmmm / dddmm.mmmm coordinates to decimal degrees * 1e7. */
+static int32_t ParseCoordinateE7(const char *text, uint8_t degree_digits, char hemisphere)
+{
+  uint32_t degrees = 0U;
+  uint32_t minutes_whole = 0U;
+  uint32_t minutes_frac = 0U;
+  uint8_t i;
+  uint8_t frac_digits = 0U;
+  int32_t result;
+
+  for (i = 0U; i < degree_digits; i++)
+  {
+    if ((text[i] < '0') || (text[i] > '9'))
+    {
+      return 0;
+    }
+    degrees = (degrees * 10U) + (uint32_t)(text[i] - '0');
+  }
+  text += degree_digits;
+  while ((*text >= '0') && (*text <= '9'))
+  {
+    minutes_whole = (minutes_whole * 10U) + (uint32_t)(*text - '0');
+    text++;
+  }
+  if (*text == '.')
+  {
+    text++;
+    while ((*text >= '0') && (*text <= '9') && (frac_digits < 4U))
+    {
+      minutes_frac = (minutes_frac * 10U) + (uint32_t)(*text - '0');
+      frac_digits++;
+      text++;
+    }
+  }
+  while (frac_digits < 4U)
+  {
+    minutes_frac *= 10U;
+    frac_digits++;
+  }
+
+  result = (int32_t)((degrees * 10000000UL) +
+                     (uint32_t)((((uint64_t)((minutes_whole * 10000UL) + minutes_frac)) * 10000000ULL) /
+                                600000ULL));
+  if ((hemisphere == 'S') || (hemisphere == 'W'))
+  {
+    result = -result;
+  }
+  return result;
+}
+
 static uint8_t IsRmcSentence(const char *line)
 {
   /*
@@ -192,6 +254,21 @@ static uint8_t IsVtgSentence(const char *line)
           (line[3] == 'V') &&
           (line[4] == 'T') &&
           (line[5] == 'G'));
+}
+
+static uint8_t IsGgaSentence(const char *line)
+{
+  return ((line[0] == '$') && (line[3] == 'G') && (line[4] == 'G') && (line[5] == 'A'));
+}
+
+static uint8_t IsGsaSentence(const char *line)
+{
+  return ((line[0] == '$') && (line[3] == 'G') && (line[4] == 'S') && (line[5] == 'A'));
+}
+
+static uint8_t IsGsvSentence(const char *line)
+{
+  return ((line[0] == '$') && (line[3] == 'G') && (line[4] == 'S') && (line[5] == 'V'));
 }
 
 static void CopyNmeaField(const char *line, uint8_t wanted_field, char *out, uint8_t out_size)
@@ -235,6 +312,11 @@ static void ParseRmcSentence(char *line)
 {
   char status_text[2];
   char speed_knots_text[16];
+  char course_text[16];
+  char latitude_text[16];
+  char ns_text[2];
+  char longitude_text[16];
+  char ew_text[2];
 
   if (!IsRmcSentence(line))
   {
@@ -250,6 +332,11 @@ static void ParseRmcSentence(char *line)
    */
   CopyNmeaField(line, 2U, status_text, sizeof(status_text));
   CopyNmeaField(line, 7U, speed_knots_text, sizeof(speed_knots_text));
+  CopyNmeaField(line, 8U, course_text, sizeof(course_text));
+  CopyNmeaField(line, 3U, latitude_text, sizeof(latitude_text));
+  CopyNmeaField(line, 4U, ns_text, sizeof(ns_text));
+  CopyNmeaField(line, 5U, longitude_text, sizeof(longitude_text));
+  CopyNmeaField(line, 6U, ew_text, sizeof(ew_text));
 
   if ((status_text[0] == 'A') && (speed_knots_text[0] != '\0'))
   {
@@ -262,18 +349,36 @@ static void ParseRmcSentence(char *line)
     gps_data.has_fix = 1U;
     gps_data.speed_valid = 1U;
     gps_data.speed_mph = CentiKnotsToMph(centi_knots);
+    if ((latitude_text[0] != '\0') && (longitude_text[0] != '\0'))
+    {
+      gps_data.latitude_e7 = ParseCoordinateE7(latitude_text, 2U, ns_text[0]);
+      gps_data.longitude_e7 = ParseCoordinateE7(longitude_text, 3U, ew_text[0]);
+      gps_data.position_valid = 1U;
+    }
+    if (course_text[0] != '\0')
+    {
+      gps_data.heading_deg = (uint16_t)(((ParseCentiKnots(course_text) + 50U) / 100U) % 360U);
+      gps_data.heading_valid = 1U;
+    }
+    else
+    {
+      gps_data.heading_valid = 0U;
+    }
   }
   else
   {
     gps_data.has_fix = 0U;
     gps_data.speed_valid = 0U;
     gps_data.speed_mph = 0U;
+    gps_data.heading_valid = 0U;
+    gps_data.position_valid = 0U;
   }
 }
 
 static void ParseVtgSentence(char *line)
 {
   char speed_knots_text[16];
+  char course_text[16];
   char mode_text[2];
   uint8_t mode_allows_speed = 1U;
 
@@ -293,6 +398,7 @@ static void ParseVtgSentence(char *line)
    * latency a bit, but the GPS module update rate is still the main limit.
    */
   CopyNmeaField(line, 5U, speed_knots_text, sizeof(speed_knots_text));
+  CopyNmeaField(line, 1U, course_text, sizeof(course_text));
   CopyNmeaField(line, 9U, mode_text, sizeof(mode_text));
 
   if (mode_text[0] == 'N')
@@ -306,6 +412,121 @@ static void ParseVtgSentence(char *line)
 
     gps_data.speed_valid = 1U;
     gps_data.speed_mph = CentiKnotsToMph(centi_knots);
+    if (course_text[0] != '\0')
+    {
+      gps_data.heading_deg = (uint16_t)(((ParseCentiKnots(course_text) + 50U) / 100U) % 360U);
+      gps_data.heading_valid = 1U;
+    }
+  }
+}
+
+static void ParseGgaSentence(char *line)
+{
+  char latitude_text[16];
+  char ns_text[2];
+  char longitude_text[16];
+  char ew_text[2];
+  char quality_text[4];
+  char satellites_text[4];
+  char altitude_text[12];
+  char hdop_text[12];
+
+  if (!IsGgaSentence(line))
+  {
+    return;
+  }
+
+  CopyNmeaField(line, 2U, latitude_text, sizeof(latitude_text));
+  CopyNmeaField(line, 3U, ns_text, sizeof(ns_text));
+  CopyNmeaField(line, 4U, longitude_text, sizeof(longitude_text));
+  CopyNmeaField(line, 5U, ew_text, sizeof(ew_text));
+  CopyNmeaField(line, 6U, quality_text, sizeof(quality_text));
+  CopyNmeaField(line, 7U, satellites_text, sizeof(satellites_text));
+  CopyNmeaField(line, 9U, altitude_text, sizeof(altitude_text));
+  CopyNmeaField(line, 8U, hdop_text, sizeof(hdop_text));
+
+  gps_data.fix_quality = (uint8_t)ParseUnsignedInteger(quality_text);
+  gps_data.satellite_count = (uint8_t)ParseUnsignedInteger(satellites_text);
+  if (hdop_text[0] != '\0')
+  {
+    gps_data.hdop_x100 = (uint16_t)ParseCentiKnots(hdop_text);
+  }
+  if ((gps_data.fix_quality != 0U) && (latitude_text[0] != '\0') && (longitude_text[0] != '\0'))
+  {
+    gps_data.latitude_e7 = ParseCoordinateE7(latitude_text, 2U, ns_text[0]);
+    gps_data.longitude_e7 = ParseCoordinateE7(longitude_text, 3U, ew_text[0]);
+    gps_data.position_valid = 1U;
+  }
+  if ((gps_data.fix_quality != 0U) && (altitude_text[0] != '\0'))
+  {
+    int32_t altitude = (int32_t)ParseUnsignedInteger((altitude_text[0] == '-') ? altitude_text + 1 : altitude_text);
+    if (altitude_text[0] == '-')
+    {
+      altitude = -altitude;
+    }
+    if (altitude > 32767) altitude = 32767;
+    if (altitude < -32768) altitude = -32768;
+    gps_data.altitude_m = (int16_t)altitude;
+    gps_data.altitude_valid = 1U;
+  }
+  else
+  {
+    gps_data.altitude_valid = 0U;
+  }
+}
+
+static void InsertStrongSnr(uint8_t snr)
+{
+  uint8_t i;
+  if (snr == 0U) return;
+  for (i = 0U; i < 4U; i++)
+  {
+    if (snr > gps_data.strongest_snr[i])
+    {
+      uint8_t j;
+      for (j = 3U; j > i; j--) gps_data.strongest_snr[j] = gps_data.strongest_snr[j - 1U];
+      gps_data.strongest_snr[i] = snr;
+      if (gps_data.snr_count < 4U) gps_data.snr_count++;
+      return;
+    }
+  }
+}
+
+static void ParseGsaSentence(char *line)
+{
+  char field[12];
+  if (!IsGsaSentence(line)) return;
+
+  CopyNmeaField(line, 2U, field, sizeof(field));
+  gps_data.fix_type = (uint8_t)ParseUnsignedInteger(field);
+  CopyNmeaField(line, 15U, field, sizeof(field));
+  if (field[0] != '\0') gps_data.pdop_x100 = (uint16_t)ParseCentiKnots(field);
+  CopyNmeaField(line, 16U, field, sizeof(field));
+  if (field[0] != '\0') gps_data.hdop_x100 = (uint16_t)ParseCentiKnots(field);
+  CopyNmeaField(line, 17U, field, sizeof(field));
+  if (field[0] != '\0') gps_data.vdop_x100 = (uint16_t)ParseCentiKnots(field);
+}
+
+static void ParseGsvSentence(char *line)
+{
+  char field[12];
+  uint8_t message_number;
+  uint8_t field_index;
+  if (!IsGsvSentence(line)) return;
+
+  CopyNmeaField(line, 2U, field, sizeof(field));
+  message_number = (uint8_t)ParseUnsignedInteger(field);
+  CopyNmeaField(line, 3U, field, sizeof(field));
+  gps_data.satellites_in_view = (uint8_t)ParseUnsignedInteger(field);
+  if (message_number == 1U)
+  {
+    memset(gps_data.strongest_snr, 0, sizeof(gps_data.strongest_snr));
+    gps_data.snr_count = 0U;
+  }
+  for (field_index = 7U; field_index <= 19U; field_index = (uint8_t)(field_index + 4U))
+  {
+    CopyNmeaField(line, field_index, field, sizeof(field));
+    if (field[0] != '\0') InsertStrongSnr((uint8_t)ParseUnsignedInteger(field));
   }
 }
 
@@ -313,6 +534,9 @@ static void ParseGpsSentence(char *line)
 {
   ParseRmcSentence(line);
   ParseVtgSentence(line);
+  ParseGgaSentence(line);
+  ParseGsaSentence(line);
+  ParseGsvSentence(line);
 }
 
 void GPS_Init(UART_HandleTypeDef *huart)
@@ -323,6 +547,22 @@ void GPS_Init(UART_HandleTypeDef *huart)
   gps_data.has_fix = 0U;
   gps_data.speed_valid = 0U;
   gps_data.speed_mph = 0U;
+  gps_data.heading_valid = 0U;
+  gps_data.heading_deg = 0U;
+  gps_data.position_valid = 0U;
+  gps_data.latitude_e7 = 0;
+  gps_data.longitude_e7 = 0;
+  gps_data.altitude_valid = 0U;
+  gps_data.altitude_m = 0;
+  gps_data.satellite_count = 0U;
+  gps_data.fix_quality = 0U;
+  gps_data.fix_type = 1U;
+  gps_data.satellites_in_view = 0U;
+  gps_data.pdop_x100 = 0U;
+  gps_data.hdop_x100 = 0U;
+  gps_data.vdop_x100 = 0U;
+  memset(gps_data.strongest_snr, 0, sizeof(gps_data.strongest_snr));
+  gps_data.snr_count = 0U;
   gps_data.rx_byte_count = 0U;
   gps_data.line_count = 0U;
   gps_data.rmc_count = 0U;
@@ -351,13 +591,13 @@ void GPS_SendStartupConfig(UART_HandleTypeDef *tx_uart)
    * and reducing the enabled sentence set.
    */
 
-  /* PMTK: output only RMC and VTG if accepted, then request 100 ms updates. */
-  SendNmeaCommand(tx_uart, "PMTK314,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
-  SendNmeaCommand(tx_uart, "PMTK220,100");
-  SendNmeaCommand(tx_uart, "PMTK300,100,0,0,0,0");
+  /* RMC + GGA at 5 Hz fits 9600 baud while adding position, altitude, and satellites. */
+  SendNmeaCommand(tx_uart, "PMTK314,0,1,0,1,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0");
+  SendNmeaCommand(tx_uart, "PMTK220,200");
+  SendNmeaCommand(tx_uart, "PMTK300,200,0,0,0,0");
 
   /* CASIC/ATGM PCAS: request a 100 ms positioning/output interval if accepted. */
-  SendNmeaCommand(tx_uart, "PCAS02,100");
+  SendNmeaCommand(tx_uart, "PCAS02,200");
 }
 
 void GPS_Task(void)
@@ -465,10 +705,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
    * driver so the rest of the project does not need GPS code in interrupt files.
    */
   GPS_UART_RxCpltCallback(huart);
+  ESP_LinkUartRxCpltCallback(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   /* Same forwarding pattern for UART error recovery. */
   GPS_UART_ErrorCallback(huart);
+  ESP_LinkUartErrorCallback(huart);
 }

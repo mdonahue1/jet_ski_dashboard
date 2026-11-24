@@ -105,6 +105,15 @@ void ST7796_DrawChar5x7(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t
 void ST7796_DrawString5x7(uint16_t x, uint16_t y, const char *text, uint16_t color, uint16_t bg_color, uint8_t scale, uint8_t draw_bg);
 uint16_t ST7796_TextWidth5x7(const char *text, uint8_t scale);
 
+/* Token high nibble is a palette index; low 12 bits are run length minus one. */
+void ST7796_DrawIndexedRle(uint16_t x,
+                          uint16_t y,
+                          uint16_t w,
+                          uint16_t h,
+                          const uint16_t *tokens,
+                          uint32_t token_count,
+                          const uint16_t palette[16]);
+
 #ifdef __cplusplus
 }
 #endif

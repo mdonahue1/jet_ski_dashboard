@@ -6,8 +6,11 @@
 # Add inputs and outputs from these tool invocations to the build variables 
 C_SRCS += \
 ../Core/Src/dash_ui.c \
+../Core/Src/esp_link.c \
 ../Core/Src/gps.c \
 ../Core/Src/main.c \
+../Core/Src/sd_card.c \
+../Core/Src/splash_image.c \
 ../Core/Src/st7796.c \
 ../Core/Src/stm32f4xx_hal_msp.c \
 ../Core/Src/stm32f4xx_it.c \
@@ -17,8 +20,11 @@ C_SRCS += \
 
 OBJS += \
 ./Core/Src/dash_ui.o \
+./Core/Src/esp_link.o \
 ./Core/Src/gps.o \
 ./Core/Src/main.o \
+./Core/Src/sd_card.o \
+./Core/Src/splash_image.o \
 ./Core/Src/st7796.o \
 ./Core/Src/stm32f4xx_hal_msp.o \
 ./Core/Src/stm32f4xx_it.o \
@@ -28,8 +34,11 @@ OBJS += \
 
 C_DEPS += \
 ./Core/Src/dash_ui.d \
+./Core/Src/esp_link.d \
 ./Core/Src/gps.d \
 ./Core/Src/main.d \
+./Core/Src/sd_card.d \
+./Core/Src/splash_image.d \
 ./Core/Src/st7796.d \
 ./Core/Src/stm32f4xx_hal_msp.d \
 ./Core/Src/stm32f4xx_it.d \

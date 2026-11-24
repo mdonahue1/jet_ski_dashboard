@@ -19,6 +19,30 @@ typedef struct
   /* Whole-MPH speed converted from the RMC speed-in-knots field. */
   uint16_t speed_mph;
 
+  /* True course-over-ground in whole degrees (0=N, 90=E, 180=S, 270=W). */
+  uint8_t heading_valid;
+  uint16_t heading_deg;
+
+  /* Signed decimal degrees scaled by 10,000,000 for exact integer storage. */
+  uint8_t position_valid;
+  int32_t latitude_e7;
+  int32_t longitude_e7;
+
+  /* GGA-derived navigation quality fields. */
+  uint8_t altitude_valid;
+  int16_t altitude_m;
+  uint8_t satellite_count;
+  uint8_t fix_quality;
+
+  /* GSA/GSV quality and signal data. Values ending in _x100 have 2 decimals. */
+  uint8_t fix_type;
+  uint8_t satellites_in_view;
+  uint16_t pdop_x100;
+  uint16_t hdop_x100;
+  uint16_t vdop_x100;
+  uint8_t strongest_snr[4];
+  uint8_t snr_count;
+
   /* Diagnostics used by the on-screen status boxes and bench testing. */
   uint32_t rx_byte_count;
   uint32_t line_count;

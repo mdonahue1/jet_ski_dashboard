@@ -57,6 +57,7 @@
 /* External variables --------------------------------------------------------*/
 extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;
+extern UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN EV */
 
@@ -220,6 +221,11 @@ void USART1_IRQHandler(void)
 void USART2_IRQHandler(void)
 {
   HAL_UART_IRQHandler(&huart2);
+}
+
+void USART6_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart6);
 }
 
 /* USER CODE END 1 */

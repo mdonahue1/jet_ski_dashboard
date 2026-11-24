@@ -60,8 +60,8 @@ all: main-build
 main-build: jet_ski_dashboard.elf secondary-outputs
 
 # Tool invocations
-jet_ski_dashboard.elf jet_ski_dashboard.map: $(OBJS) $(USER_OBJS) C:\Users\mdonahue1\STM32CubeIDE\workspace_1.19.0\jet_ski_dashboard\STM32F446RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "jet_ski_dashboard.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\mdonahue1\STM32CubeIDE\workspace_1.19.0\jet_ski_dashboard\STM32F446RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="jet_ski_dashboard.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+jet_ski_dashboard.elf jet_ski_dashboard.map: $(OBJS) $(USER_OBJS) ../STM32F446RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "jet_ski_dashboard.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"../STM32F446RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="jet_ski_dashboard.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

@@ -57,6 +57,7 @@ void PendSV_Handler(void);
 void SysTick_Handler(void);
 /* USER CODE BEGIN EFP */
 void USART2_IRQHandler(void);
+void USART6_IRQHandler(void);
 
 /* USER CODE END EFP */
 

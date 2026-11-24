@@ -22,7 +22,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "dash_ui.h"
+#include "esp_link.h"
 #include "gps.h"
+#include "sd_card.h"
+#include "splash_image.h"
 #include "st7796.h"
 
 /* USER CODE END Includes */
@@ -67,9 +70,15 @@ SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN PV */
 GPS_Data_t gps_data;
+static uint32_t sd_last_poll_ms = 0U;
+static uint8_t sd_card_ready = 0U;
+static uint8_t custom_mode_enabled = 0U;
+static GPIO_PinState button_last_state = GPIO_PIN_SET;
+static uint32_t button_last_change_ms = 0U;
 #if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
 static uint32_t gps_raw_pa3_edge_count = 0U;
 static GPIO_PinState gps_raw_pa3_last_state = GPIO_PIN_RESET;
@@ -82,6 +91,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART6_UART_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 
@@ -89,6 +99,30 @@ static void MX_SPI1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void DashboardButtonTask(void)
+{
+  GPIO_PinState state = HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin);
+  uint32_t now = HAL_GetTick();
+
+  if (state != button_last_state)
+  {
+    if ((now - button_last_change_ms) >= 40U)
+    {
+      button_last_state = state;
+      button_last_change_ms = now;
+      if (state == GPIO_PIN_RESET)
+      {
+        custom_mode_enabled = (uint8_t)((custom_mode_enabled + 1U) % 3U);
+        DashUI_SetCustomMode(custom_mode_enabled);
+      }
+    }
+  }
+  else
+  {
+    button_last_change_ms = now;
+  }
+}
+
 #if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
 static void GPS_DebugRawPa3Init(void)
 {
@@ -155,12 +189,22 @@ int main(void)
    */
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
+  MX_USART6_UART_Init();
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   /* Bring up the TFT first, then draw the static dashboard shell. */
   ST7796_Init();
+  SplashImage_Draw();
+  HAL_Delay(1800U);
   DashUI_Init();
   DashUI_UpdateSpeed(0U);
+  sd_card_ready = SDCard_Init(&hspi1);
+  DashUI_UpdateSdStatus(sd_card_ready);
+  ESP_LinkInit(&huart6);
+  DashUI_UpdateEspStatus(0U);
+  button_last_state = HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin);
+  button_last_change_ms = HAL_GetTick();
+  sd_last_poll_ms = HAL_GetTick();
 #if (GPS_DEBUG_RAW_PA3_EDGE_TEST != 0U)
   GPS_DebugRawPa3Init();
 #else
@@ -192,10 +236,36 @@ int main(void)
     DashUI_UpdateSpeed((uint16_t)(gps_raw_pa3_edge_count % 200U));
 #else
     GPS_Task();
+    ESP_LinkTask();
+    ESP_LinkData_t esp_data = ESP_LinkGetData();
+    DashboardButtonTask();
     gps_data = GPS_GetData();
+    if ((HAL_GetTick() - sd_last_poll_ms) >= 2000U)
+    {
+      sd_card_ready = SDCard_Poll();
+      DashUI_UpdateSdStatus(sd_card_ready);
+      sd_last_poll_ms = HAL_GetTick();
+    }
+    DashUI_UpdateEspStatus(ESP_LinkIsOnline());
+    DashUI_UpdateWifiCount(esp_data.network_count);
+    DashUI_UpdateWardriveStats(esp_data.scan_id, esp_data.line_count);
+    DashUI_UpdateWardriveGps(gps_data.position_valid,
+                             gps_data.latitude_e7,
+                             gps_data.longitude_e7,
+                             gps_data.altitude_valid,
+                             gps_data.altitude_m,
+                             gps_data.satellite_count);
+    DashUI_UpdateSatelliteMode(gps_data.fix_type,
+                               gps_data.satellite_count,
+                               gps_data.satellites_in_view,
+                               gps_data.hdop_x100,
+                               gps_data.pdop_x100,
+                               gps_data.vdop_x100,
+                               gps_data.strongest_snr);
     DashUI_UpdateGpsStatus((gps_data.rx_byte_count > 0U) ? 1U : 0U,
                            (gps_data.line_count > 0U) ? 1U : 0U,
                            gps_data.has_fix);
+    DashUI_UpdateHeading(gps_data.heading_valid, gps_data.heading_deg);
     if (gps_data.speed_valid != 0U)
     {
       DashUI_UpdateSpeed(gps_data.speed_mph);
@@ -368,6 +438,27 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * @brief USART6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART6_UART_Init(void)
+{
+  huart6.Instance = USART6;
+  huart6.Init.BaudRate = 115200;
+  huart6.Init.WordLength = UART_WORDLENGTH_8B;
+  huart6.Init.StopBits = UART_STOPBITS_1;
+  huart6.Init.Parity = UART_PARITY_NONE;
+  huart6.Init.Mode = UART_MODE_TX_RX;
+  huart6.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart6.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -393,6 +484,9 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(TFT_CS_GPIO_Port, TFT_CS_Pin, GPIO_PIN_RESET);
+
+  /* Keep the SD card deselected while the display owns the shared SPI bus. */
+  HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -420,6 +514,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(TFT_CS_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SD_CS_Pin */
+  GPIO_InitStruct.Pin = SD_CS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(SD_CS_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 

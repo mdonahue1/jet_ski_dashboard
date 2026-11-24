@@ -242,6 +242,63 @@ void ST7796_Fill(uint16_t color)
   ST7796_FillRect(0U, 0U, ST7796_WIDTH, ST7796_HEIGHT, color);
 }
 
+void ST7796_DrawIndexedRle(uint16_t x,
+                          uint16_t y,
+                          uint16_t w,
+                          uint16_t h,
+                          const uint16_t *tokens,
+                          uint32_t token_count,
+                          const uint16_t palette[16])
+{
+  uint8_t pixels[ST7796_FILL_CHUNK_PIXELS * 2U];
+  uint32_t token_index;
+  uint32_t remaining;
+
+  if ((tokens == 0) || (palette == 0) || (w == 0U) || (h == 0U) ||
+      (x >= ST7796_WIDTH) || (y >= ST7796_HEIGHT) ||
+      (((uint32_t)x + w) > ST7796_WIDTH) || (((uint32_t)y + h) > ST7796_HEIGHT))
+  {
+    return;
+  }
+
+  remaining = (uint32_t)w * h;
+  ST7796_Select();
+  ST7796_SetWindow(x, y, (uint16_t)(x + w - 1U), (uint16_t)(y + h - 1U));
+  ST7796_DataMode();
+
+  for (token_index = 0U; (token_index < token_count) && (remaining > 0U); token_index++)
+  {
+    uint16_t token = tokens[token_index];
+    uint16_t color = palette[token >> 12];
+    uint32_t run = (uint32_t)(token & 0x0FFFU) + 1U;
+    uint16_t i;
+
+    if (run > remaining)
+    {
+      run = remaining;
+    }
+    for (i = 0U; i < ST7796_FILL_CHUNK_PIXELS; i++)
+    {
+      pixels[2U * i] = (uint8_t)(color >> 8);
+      pixels[(2U * i) + 1U] = (uint8_t)color;
+    }
+
+    while (run >= ST7796_FILL_CHUNK_PIXELS)
+    {
+      (void)HAL_SPI_Transmit(&hspi1, pixels, sizeof(pixels), ST7796_SPI_TIMEOUT);
+      run -= ST7796_FILL_CHUNK_PIXELS;
+      remaining -= ST7796_FILL_CHUNK_PIXELS;
+    }
+    if (run > 0U)
+    {
+      (void)HAL_SPI_Transmit(&hspi1, pixels, (uint16_t)(run * 2U), ST7796_SPI_TIMEOUT);
+      remaining -= run;
+    }
+  }
+
+  ST7796_Unselect();
+}
+
 void ST7796_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 {
   uint32_t pixels;
