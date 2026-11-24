@@ -11,6 +11,8 @@ C_SRCS += \
 ../Core/Src/main.c \
 ../Core/Src/sd_card.c \
 ../Core/Src/splash_image.c \
+../Core/Src/splash_image_alt_wave.c \
+../Core/Src/splash_selector.c \
 ../Core/Src/st7796.c \
 ../Core/Src/stm32f4xx_hal_msp.c \
 ../Core/Src/stm32f4xx_it.c \
@@ -25,6 +27,8 @@ OBJS += \
 ./Core/Src/main.o \
 ./Core/Src/sd_card.o \
 ./Core/Src/splash_image.o \
+./Core/Src/splash_image_alt_wave.o \
+./Core/Src/splash_selector.o \
 ./Core/Src/st7796.o \
 ./Core/Src/stm32f4xx_hal_msp.o \
 ./Core/Src/stm32f4xx_it.o \
@@ -39,6 +43,8 @@ C_DEPS += \
 ./Core/Src/main.d \
 ./Core/Src/sd_card.d \
 ./Core/Src/splash_image.d \
+./Core/Src/splash_image_alt_wave.d \
+./Core/Src/splash_selector.d \
 ./Core/Src/st7796.d \
 ./Core/Src/stm32f4xx_hal_msp.d \
 ./Core/Src/stm32f4xx_it.d \

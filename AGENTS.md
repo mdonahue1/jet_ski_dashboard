@@ -139,7 +139,10 @@ Current design:
 - Frames sent to STM32 include `C6,READY`, `WD,BEGIN`, `WD,AP`, and `WD,END`.
 - AP records contain scan ID, channel, RSSI, security code, BSSID, and CSV-sanitized SSID.
 - GPS-tagged FAT/CSV logging to SD is the next major feature; it is not implemented yet.
-- The current CHUD Dynamics splash remains the default. A future user-supplied image should be added as an alternate selectable splash, not overwrite the default asset.
+- Two compiled splash assets are available: the original CHUD Dynamics image and the monochrome wave image.
+- Select one with `SPLASH_IMAGE_SELECTION` in `Core/Inc/splash_image.h`; the wave image is currently selected.
+- `SplashImage_DrawSelected()` keeps selection out of `main.c`. Source/preview assets live under `assets/` and the repo root.
+- `tools/generate_splash.ps1` accepts named function/symbol parameters plus black or white letterboxing, so future images can be added without overwriting existing generated C.
 
 ## Build
 

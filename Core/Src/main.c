@@ -194,7 +194,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   /* Bring up the TFT first, then draw the static dashboard shell. */
   ST7796_Init();
-  SplashImage_Draw();
+  SplashImage_DrawSelected();
   HAL_Delay(1800U);
   DashUI_Init();
   DashUI_UpdateSpeed(0U);

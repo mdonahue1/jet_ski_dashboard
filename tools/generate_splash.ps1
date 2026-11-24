@@ -1,7 +1,11 @@
 param(
   [Parameter(Mandatory = $true)][string]$InputPng,
   [string]$OutputC = "Core/Src/splash_image.c",
-  [string]$PreviewPng = "splash_preview.png"
+  [string]$PreviewPng = "splash_preview.png",
+  [string]$FunctionName = "SplashImage_Draw",
+  [string]$SymbolPrefix = "splash",
+  [ValidateSet("White", "Black")][string]$Background = "White",
+  [int]$CropTop = 3
 )
 
 Add-Type -AssemblyName System.Drawing
@@ -11,13 +15,13 @@ $screenH = 320
 $source = [System.Drawing.Bitmap]::new($InputPng)
 $canvas = [System.Drawing.Bitmap]::new($screenW, $screenH, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
 $graphics = [System.Drawing.Graphics]::FromImage($canvas)
-$graphics.Clear([System.Drawing.Color]::White)
+$graphics.Clear($(if ($Background -eq "Black") { [System.Drawing.Color]::Black } else { [System.Drawing.Color]::White }))
 $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
 
 # Drop the screenshot's thin top-edge artifact, then preserve the complete logo.
-$cropTop = 3
+$cropTop = [Math]::Max(0, [Math]::Min($CropTop, $source.Height - 1))
 $srcRect = [System.Drawing.Rectangle]::new(0, $cropTop, $source.Width, $source.Height - $cropTop)
 $scale = [Math]::Min($screenW / $srcRect.Width, $screenH / $srcRect.Height)
 $drawW = [int][Math]::Round($srcRect.Width * $scale)
@@ -67,7 +71,7 @@ $builder = [System.Text.StringBuilder]::new()
 [void]$builder.AppendLine('#include "splash_image.h"')
 [void]$builder.AppendLine('#include "st7796.h"')
 [void]$builder.AppendLine('')
-[void]$builder.AppendLine('static const uint16_t splash_palette[16] = {')
+[void]$builder.AppendLine("static const uint16_t ${SymbolPrefix}_palette[16] = {")
 for ($i = 0; $i -lt 16; $i++) {
   $gray = [int][Math]::Round($i * 255.0 / 15.0)
   $rgb565 = (($gray -shr 3) -shl 11) -bor (($gray -shr 2) -shl 5) -bor ($gray -shr 3)
@@ -76,7 +80,7 @@ for ($i = 0; $i -lt 16; $i++) {
 }
 [void]$builder.AppendLine('};')
 [void]$builder.AppendLine('')
-[void]$builder.AppendLine('static const uint16_t splash_tokens[] = {')
+[void]$builder.AppendLine("static const uint16_t ${SymbolPrefix}_tokens[] = {")
 for ($i = 0; $i -lt $tokens.Count; $i++) {
   if (($i % 12) -eq 0) { [void]$builder.Append('  ') }
   [void]$builder.Append(('0x{0:X4}U' -f $tokens[$i]))
@@ -85,12 +89,12 @@ for ($i = 0; $i -lt $tokens.Count; $i++) {
 }
 [void]$builder.AppendLine('};')
 [void]$builder.AppendLine('')
-[void]$builder.AppendLine('void SplashImage_Draw(void)')
+[void]$builder.AppendLine("void ${FunctionName}(void)")
 [void]$builder.AppendLine('{')
 [void]$builder.AppendLine('  ST7796_DrawIndexedRle(0U, 0U, 480U, 320U,')
-[void]$builder.AppendLine('                          splash_tokens,')
-[void]$builder.AppendLine('                          (uint32_t)(sizeof(splash_tokens) / sizeof(splash_tokens[0])),')
-[void]$builder.AppendLine('                          splash_palette);')
+[void]$builder.AppendLine("                          ${SymbolPrefix}_tokens,")
+[void]$builder.AppendLine("                          (uint32_t)(sizeof(${SymbolPrefix}_tokens) / sizeof(${SymbolPrefix}_tokens[0])),")
+[void]$builder.AppendLine("                          ${SymbolPrefix}_palette);")
 [void]$builder.AppendLine('}')
 
 $absoluteOutput = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $OutputC))
