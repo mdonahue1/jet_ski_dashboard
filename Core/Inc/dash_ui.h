@@ -13,6 +13,9 @@ void DashUI_Init(void);
 /* Update the speed readout. The UI code decides what actually needs repainting. */
 void DashUI_UpdateSpeed(uint16_t mph);
 
+/* Replace stale speed digits with a cached loss-of-fix message. */
+void DashUI_ShowNoGps(void);
+
 /* Display GPS true course-over-ground on the normal gauge screen. */
 void DashUI_UpdateHeading(uint8_t valid, uint16_t heading_deg);
 

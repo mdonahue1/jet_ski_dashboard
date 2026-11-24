@@ -270,10 +270,17 @@ int main(void)
     {
       DashUI_UpdateSpeed(gps_data.speed_mph);
     }
+#if (GPS_DEBUG_SHOW_RX_COUNT_AS_SPEED == 0U)
+    else
+    {
+      DashUI_ShowNoGps();
+    }
+#endif
 #if (GPS_DEBUG_SHOW_RX_COUNT_AS_SPEED != 0U)
     else
     {
       DashUI_UpdateSpeed((uint16_t)(gps_data.rx_byte_count % 200U));
+      
     }
 #endif
     HAL_Delay(5);

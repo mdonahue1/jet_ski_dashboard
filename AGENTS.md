@@ -103,6 +103,7 @@ Current design:
 - The bottom horizontal speed bar was removed to keep the MPH screen cleaner.
 - The Nucleo blue user button cycles three screens: MPH gauge -> Wi-Fi scan -> satellite quality -> MPH gauge.
 - The MPH screen includes `HDG ---` / `HDG 000..359` but intentionally has no AP counter.
+- When GPS speed is invalid, the MPH screen replaces stale digits with a cached `NO GPS FIX` message and restores the gauge when data returns.
 - Wi-Fi scan mode shows AP count, scan/UART counters, latitude, longitude, altitude, and satellites used.
 - Satellite mode shows fix type, satellites used/in view, four strongest SNR bars, HDOP, and HDOP-derived estimated accuracy.
 - SD and ESP status badges remain visible; the three GPS diagnostic pills show bytes, lines, and valid fix.
@@ -138,6 +139,7 @@ Current design:
 - Frames sent to STM32 include `C6,READY`, `WD,BEGIN`, `WD,AP`, and `WD,END`.
 - AP records contain scan ID, channel, RSSI, security code, BSSID, and CSV-sanitized SSID.
 - GPS-tagged FAT/CSV logging to SD is the next major feature; it is not implemented yet.
+- The current CHUD Dynamics splash remains the default. A future user-supplied image should be added as an alternate selectable splash, not overwrite the default asset.
 
 ## Build
 

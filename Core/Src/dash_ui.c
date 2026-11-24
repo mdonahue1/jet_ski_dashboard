@@ -44,6 +44,7 @@
 static uint16_t last_mph = 0xFFFFU;
 static uint16_t last_heading = 0xFFFFU;
 static uint8_t last_heading_valid = 0xFFU;
+static uint8_t no_gps_visible = 0U;
 /*
  * These cached status values avoid repainting small rectangles when nothing
  * changed. SPI display writes are much slower than normal CPU math, so caching
@@ -350,6 +351,7 @@ void DashUI_Init(void)
   last_mph = 0xFFFFU;
   last_heading = 0xFFFFU;
   last_heading_valid = 0xFFU;
+  no_gps_visible = 0U;
   last_gps_rx = 0xFFU;
   last_gps_line = 0xFFU;
   last_gps_fix = 0xFFU;
@@ -392,6 +394,18 @@ void DashUI_UpdateSpeed(uint16_t mph)
   {
     return;
   }
+
+  if (no_gps_visible != 0U)
+  {
+    /* Remove the message, then restore any gauge artwork under its text. */
+    ST7796_FillRect(145U, 132U, 190U, 24U, DASH_BG);
+    DrawGaugeRing();
+    DrawGaugeScale();
+    last_mph = 0xFFFFU;
+    last_sweep_percent = 0xFFU;
+    last_digit_count = 0U;
+    no_gps_visible = 0U;
+  }
   /* Keep wild test/GPS values from drawing outside the three-digit area. */
   if (mph > 199U)
   {
@@ -412,6 +426,22 @@ void DashUI_UpdateSpeed(uint16_t mph)
   DrawSpeedArc(mph, 0U);
   DrawSpeedDigits(mph);
   last_mph = mph;
+}
+
+void DashUI_ShowNoGps(void)
+{
+  if ((custom_mode != 0U) || (no_gps_visible != 0U))
+  {
+    return;
+  }
+
+  /* Erase only the old digit cells, then restore the speed arc behind them. */
+  ErasePreviousSpeedDigits();
+  DrawSpeedArc(0U, 1U);
+  ST7796_FillRect(145U, 132U, 190U, 24U, DASH_BG);
+  ST7796_DrawString5x7(151U, 134U, "NO GPS FIX", DASH_ORANGE, DASH_BG, 3U, 0U);
+  no_gps_visible = 1U;
+  last_mph = 0xFFFFU;
 }
 
 void DashUI_UpdateHeading(uint8_t valid, uint16_t heading_deg)
@@ -558,6 +588,7 @@ void DashUI_SetCustomMode(uint8_t enabled)
   last_wifi_count = 0xFFFFU;
   last_heading = 0xFFFFU;
   last_heading_valid = 0xFFU;
+  no_gps_visible = 0U;
   last_scan_id = 0xFFFFFFFFUL;
   last_uart_lines = 0xFFFFFFFFUL;
   last_latitude_e7 = INT32_MAX;
